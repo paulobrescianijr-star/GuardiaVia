@@ -1,3 +1,4 @@
+
 name: Build GuardiaVia APK
 
 on:
@@ -9,36 +10,44 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout do Codigo
+    - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Instalar Node.js 18
+    - name: Setup Node.js 18
       uses: actions/setup-node@v4
       with:
         node-version: 18
 
-    - name: Instalar Java JDK 17
+    - name: Setup Java JDK 17
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Instalar Android SDK
+    - name: Setup Android SDK
       uses: android-actions/setup-android@v3
 
-    - name: Instalar Cordova CLI
+    - name: Install Cordova CLI
       run: npm install -g cordova
 
-    - name: Instalar Dependencias
+    - name: Install Dependencies
       run: npm install
 
-    - name: Adicionar Plataforma Android
+    - name: Organize WWW Folder
+      run: |
+        mkdir -p www
+        cp index.html www/ 2>/dev/null || true
+        cp icon.svg www/ 2>/dev/null || true
+        cp manifest.json www/ 2>/dev/null || true
+        cp sw.js www/ 2>/dev/null || true
+
+    - name: Add Android Platform
       run: cordova platform add android@13.0.0
 
-    - name: Construir APK (Debug)
+    - name: Build APK (Debug)
       run: cordova build android --debug
 
-    - name: Disponibilizar APK para Download
+    - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
         name: GuardiaVia-APK-Debug
