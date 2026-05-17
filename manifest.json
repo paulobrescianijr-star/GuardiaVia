@@ -1,0 +1,77 @@
+{
+  "name": "GuardiaVia",
+  "short_name": "GuardiaVia",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f0f0f",
+  "theme_color": "#00ff6a",
+  "description": "Proteção veicular e saúde em tempo real — Monitoramento GPS, batimento cardíaco, pressão arterial e detecção de colisão",
+  "id": "guardiavia-pwa",
+  "icons": [
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-72.png",
+      "sizes": "72x72",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "screenshot-wide.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "GuardiaVia Dashboard"
+    },
+    {
+      "src": "screenshot-narrow.png",
+      "sizes": "720x1280",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "GuardiaVia no celular"
+    }
+  ],
+  "categories": ["health", "safety", "navigation", "medical"],
+  "lang": "pt-BR",
+  "dir": "ltr",
+  "scope": "/",
+  "prefer_related_applications": false,
+  "permissions": [
+    "geolocation",
+    "notifications",
+    "bluetooth",
+    "vibrate"
+  ],
+  "permissions_policy": {
+    "geolocation": ["self"],
+    "accelerometer": ["self"],
+    "gyroscope": ["self"],
+    "bluetooth": ["self"],
+    "vibrate": ["self"],
+    "notifications": ["self"],
+    "wake-lock": ["self"]
+  },
+  "handle_links": "preferred",
+  "launch_handler": {
+    "client_mode": "focus-existing"
+  }
+}

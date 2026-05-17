@@ -1,0 +1,2524 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#00ff6a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="icon" type="image/svg+xml" href="icon.svg" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+  <link rel="apple-touch-icon" href="icon-512.png" />
+  <link rel="manifest" href="manifest.json" />
+  <title>GuardiaVia Dashboard</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- Cordova -->
+  <script src="cordova.js"></script>
+  
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0f0f0f; }
+    #root { width:100%; min-height:100vh; overflow-y:auto; overflow-x:hidden; }
+    #root::-webkit-scrollbar { display:none; }
+    @keyframes pulse { 0%,100%{ opacity:1; } 50%{ opacity:0.85; } }
+    @keyframes shieldPulse { 0%,100%{ filter: drop-shadow(0 0 25px rgba(0,229,255,0.5)) drop-shadow(0 0 50px rgba(0,229,255,0.2)); transform: scale(1); } 50%{ filter: drop-shadow(0 0 40px rgba(0,229,255,0.7)) drop-shadow(0 0 80px rgba(0,229,255,0.3)); transform: scale(1.03); } }
+    @keyframes corePulse { 0%,100%{ opacity:0.6; r:6; } 50%{ opacity:1; r:10; } }
+    @keyframes hexFloat { 0%,100%{ opacity:0.06; } 50%{ opacity:0.12; } }
+    @keyframes btnGlow { 0%,100%{ box-shadow: 0 0 20px rgba(0,229,255,0.3), 0 0 40px rgba(0,229,255,0.1), inset 0 0 20px rgba(0,229,255,0.05); } 50%{ box-shadow: 0 0 30px rgba(0,229,255,0.5), 0 0 60px rgba(0,229,255,0.2), inset 0 0 30px rgba(0,229,255,0.1); } }
+    @keyframes scanLine { 0%{ top:-2px; } 100%{ top:100%; } }
+    @keyframes statusFade { 0%{ opacity:0; transform:translateY(8px); } 100%{ opacity:1; transform:translateY(0); } }
+    @keyframes heartbeat { 0%,40%,100%{ transform:scale(1); } 20%{ transform:scale(1.15); } }
+    /* Smartwatch: tela pequena ≤ 280px */
+    @media (max-width: 280px) {
+      .watch-hide { display: none !important; }
+      .watch-compact { padding: 6px 8px !important; font-size: 10px !important; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // === CORDOVA: APIs NATIVAS ===
+    const isCordova = !!window.cordova;
+    let cordovaReady = false;
+
+    document.addEventListener('deviceready', () => {
+      cordovaReady = true;
+      console.log('[GuardiaVia] Cordova pronto!');
+      
+      // Solicitar permissões nativas na inicialização
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          () => console.log('[GuardiaVia] ✅ GPS permitido'),
+          (err) => console.warn('[GuardiaVia] ❌ GPS negado:', err.message),
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
+      }
+    }, false);
+
+    // Vibração nativa (Cordova > Web)
+    function nativeVibrate(pattern) {
+      if (cordovaReady && navigator.vibrate) {
+        navigator.vibrate(pattern);
+      } else if (navigator.vibrate) {
+        navigator.vibrate(pattern);
+      }
+    }
+
+    function nativeVibratePattern(timings) {
+      nativeVibrate(timings);
+    }
+
+    // GPS nativo (Cordova)
+    function nativeGetPosition(success, error) {
+      if (cordovaReady && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(success, error, {
+          enableHighAccuracy: true,
+          timeout: 15000,
+          maximumAge: 0
+        });
+      } else {
+        error({ message: 'GPS não disponível' });
+      }
+    }
+
+    // Bluetooth nativo (Cordova)
+    function nativeBluetoothScan(callback) {
+      if (cordovaReady && window.bluetoothle) {
+        window.bluetoothle.initialize(() => {
+          window.bluetoothle.startScan((result) => {
+            if (result.status === 'scanResult') {
+              callback({ name: result.name, address: result.address });
+            }
+          }, (err) => console.error('[BLE]', err), { services: [] });
+        }, (err) => console.error('[BLE Init]', err));
+      } else {
+        console.warn('[GuardiaVia] BluetoothLE não disponível');
+      }
+    }
+
+    function nativeBluetoothConnect(address, onData) {
+      if (cordovaReady && window.bluetoothle) {
+        window.bluetoothle.connect((result) => {
+          if (result.status === 'connected') {
+            window.bluetoothle.discover((disc) => {
+              disc.services.forEach((svc) => {
+                svc.characteristics.forEach((ch) => {
+                  if (ch.properties.notify || ch.properties.indicate) {
+                    window.bluetoothle.subscribe((sub) => {
+                      if (sub.value) {
+                        const bytes = window.bluetoothle.encodedStringToBytes(sub.value);
+                        let bpm = null;
+                        if (bytes.length >= 2) {
+                          const flags = bytes[0];
+                          bpm = (flags & 0x01) ? (bytes[2] << 8) | bytes[1] : bytes[1];
+                        } else if (bytes.length === 1) {
+                          bpm = bytes[0];
+                        }
+                        if (bpm != null && !isNaN(bpm) && bpm >= 10 && bpm <= 250) {
+                          onData(bpm);
+                        }
+                      }
+                    }, (err) => console.error('[BLE Sub]', err), {
+                      address: address,
+                      service: svc.uuid,
+                      characteristic: ch.uuid
+                    });
+                  }
+                });
+              });
+            }, (err) => console.error('[BLE Discover]', err), { address: address });
+          }
+        }, (err) => console.error('[BLE Connect]', err), { address: address });
+      }
+    }
+
+    // === PROTEÇÃO ANTIPIRATARIA E INTEGRIDADE ===
+    // Domínios autorizados (Netlify + localhost para dev)
+    const AUTHORIZED_DOMAINS = ['localhost', '127.0.0.1', '.netlify.app', '.netlify.com'];
+    const APP_SIGNATURE = 'GV-PSB-2026'; // Assinatura do desenvolvedor
+
+    (function integrityCheck() {
+      // 1. Verificação de domínio (impede clone em outro servidor)
+      const host = window.location.hostname;
+      const isAuthorized = AUTHORIZED_DOMAINS.some(d => d.startsWith('.') ? host.endsWith(d) : host === d);
+      if (!isAuthorized && host !== '' && host !== 'null') {
+        console.error('[GuardiaVia] ❌ Domínio não autorizado:', host);
+        document.body.innerHTML = '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f0f0f;color:#ff5555;font-family:sans-serif;text-align:center;padding:20px"><div><h1 style="font-size:24px;margin-bottom:10px">⛔ Acesso Negado</h1><p style="font-size:14px;color:#999">Esta cópia do GuardiaVia não é autorizada.<br>© Paulo Sergio Bresciani Junior</p></div></div>';
+        throw new Error('Unauthorized domain');
+      }
+
+      // 2. Anti-tampering: verifica se funções críticas existem
+      const criticalFns = ['setPINStorage', 'verifyPIN', 'sendTelegram'];
+      setTimeout(() => {
+        criticalFns.forEach(fn => {
+          if (typeof window[fn] === 'undefined' && typeof eval(fn) === 'undefined') {
+            // Silently log - função pode estar em closure
+          }
+        });
+      }, 5000);
+
+      // 3. Anti-debug (dificulta engenharia reversa)
+      let devToolsOpen = false;
+      const threshold = 160;
+      const checkDevTools = () => {
+        const widthThreshold = window.outerWidth - window.innerWidth > threshold;
+        const heightThreshold = window.outerHeight - window.innerHeight > threshold;
+        if (widthThreshold || heightThreshold) {
+          if (!devToolsOpen) {
+            devToolsOpen = true;
+            console.warn('[GuardiaVia] DevTools detectado — modo protegido ativo');
+          }
+        } else {
+          devToolsOpen = false;
+        }
+      };
+      setInterval(checkDevTools, 2000);
+
+      // 4. Verificação de assinatura na inicialização
+      const storedSig = localStorage.getItem('gv_app_signature');
+      if (!storedSig) {
+        localStorage.setItem('gv_app_signature', APP_SIGNATURE);
+      } else if (storedSig !== APP_SIGNATURE) {
+        console.warn('[GuardiaVia] ⚠️ Assinatura alterada — possível clone detectado');
+        localStorage.setItem('gv_app_signature', APP_SIGNATURE);
+      }
+
+      // 5. Impedir iframe embedding por terceiros (clickjacking)
+      // Nota: só bloqueia se O APP está dentro de iframe (não afeta iframes que o app usa)
+      if (window.self !== window.top && !document.referrer.includes('netlify')) {
+        try { window.top.location = window.self.location; } catch(e) {}
+      }
+
+      console.log('[GuardiaVia] ✅ Verificação de integridade OK —', APP_SIGNATURE);
+    })();
+
+    // === WEB BLUETOOTH FALLBACK (PWA / Navegador) ===
+    async function connectWebBluetooth() {
+      if (!navigator.bluetooth) {
+        alert('❌ Web Bluetooth não disponível!\n\nUse Chrome Android (versão 56+).\nNão funciona no Safari/iOS.');
+        return;
+      }
+      try {
+        const device = await navigator.bluetooth.requestDevice({
+          acceptAllDevices: true,
+          optionalServices: ['0000180d-0000-1000-8000-00805f9b34fb', 'heart_rate', '0000fee0-0000-1000-8000-00805f9b34fb', '0000fee1-0000-1000-8000-00805f9b34fb', '0000ffe0-0000-1000-8000-00805f9b34fb', '0000180a-0000-1000-8000-00805f9b34fb']
+        });
+        playClick();
+        const server = await device.gatt.connect();
+        const services = await server.getPrimaryServices();
+        let hrChar = null;
+        for (const svc of services) {
+          try {
+            const chars = await svc.getCharacteristics();
+            for (const ch of chars) {
+              if (ch.properties.notify && !hrChar) hrChar = ch;
+            }
+          } catch(e) {}
+        }
+        if (!hrChar) {
+          for (const svc of services) {
+            try {
+              const chars = await svc.getCharacteristics();
+              if (chars.length > 0) { hrChar = chars[0]; break; }
+            } catch(e) {}
+          }
+        }
+        if (!hrChar) {
+          alert('⚠️ Relógio conectado, mas não encontrou canal de dados.');
+          return;
+        }
+        await hrChar.startNotifications();
+        hrChar.addEventListener('characteristicvaluechanged', (e) => {
+          const val = e.target.value;
+          let bpm = null;
+          if (val.byteLength >= 2) {
+            const flags = val.getUint8(0);
+            bpm = (flags & 0x01) ? val.getUint16(1, true) : val.getUint8(1);
+          }
+          if ((bpm == null || bpm > 250 || bpm < 10) && val.byteLength >= 1) {
+            bpm = val.getUint8(val.byteLength - 1);
+          }
+          if ((bpm == null || bpm > 250 || bpm < 10) && val.byteLength >= 2) {
+            bpm = val.getUint8(1);
+          }
+          if (bpm != null && !isNaN(bpm) && bpm >= 10 && bpm <= 250) {
+            setHeartRate(bpm);
+            setSensorStatus(s => ({...s, hr: 'ok'}));
+          }
+        });
+        alert('✅ ' + (device.name || 'Relógio') + ' conectado!\n\nSincronizando dados do pulso...');
+      } catch(err) {
+        playClick();
+        if (err.name === 'NotFoundError') {
+          alert('⚠️ Nenhum dispositivo encontrado.\n\n1. Bluetooth ligado\n2. Relógio próximo e ligado\n3. Relógio em modo de pareamento');
+        } else if (err.name === 'SecurityError') {
+          alert('❌ SecurityError: Use Chrome Android + HTTPS');
+        } else if (err.name === 'NotAllowedError') {
+          alert('❌ NotAllowedError: Toque diretamente no botão');
+        } else {
+          alert('❌ Erro [' + err.name + ']: ' + err.message);
+        }
+      }
+    }
+
+    // === SISTEMA DE SEGURANÇA ===
+    // PIN de acesso, biometria, bloqueio por inatividade, anti-roubo
+    const SECURITY_CONFIG = {
+      PIN_KEY: 'gv_pin',
+      LOCK_TIMEOUT: 300000, // 5 min de inatividade → bloqueia
+      MAX_ATTEMPTS: 5,
+      LOCKOUT_TIME: 300000, // 5 min bloqueado após 5 tentativas
+      BIOMETRIC_KEY: 'gv_biometric',
+      SETUP_KEY: 'gv_setup_done',
+      LAST_ACTIVITY_KEY: 'gv_last_activity',
+      FAILED_ATTEMPTS_KEY: 'gv_failed_attempts',
+      LOCKOUT_UNTIL_KEY: 'gv_lockout_until',
+      EMERGENCY_BYPASS: true, // Alertas funcionam mesmo com app bloqueado
+    };
+
+    // Hash SHA-256 para PIN (irreversível)
+    async function hashPIN(pin) {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(pin + 'guardiavia_salt_2026');
+      const hash = await crypto.subtle.digest('SHA-256', data);
+      return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2,'0')).join('');
+    }
+    // Criptografia AES para dados sensíveis (usa PIN como chave)
+    async function deriveKey(pin) {
+      const encoder = new TextEncoder();
+      const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(pin), 'PBKDF2', false, ['deriveKey']);
+      return crypto.subtle.deriveKey({ name:'PBKDF2', salt: encoder.encode('guardiavia2026'), iterations:100000, hash:'SHA-256' }, keyMaterial, { name:'AES-GCM', length:256 }, false, ['encrypt','decrypt']);
+    }
+    async function encryptData(data, pin) {
+      try {
+        const key = await deriveKey(pin);
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const encoded = new TextEncoder().encode(JSON.stringify(data));
+        const encrypted = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, key, encoded);
+        return JSON.stringify({ iv: Array.from(iv), data: Array.from(new Uint8Array(encrypted)) });
+      } catch(e) { return JSON.stringify(data); }
+    }
+    async function decryptData(stored, pin) {
+      try {
+        const { iv, data } = JSON.parse(stored);
+        if (!iv || !data) return JSON.parse(stored); // Dados antigos não criptografados
+        const key = await deriveKey(pin);
+        const decrypted = await crypto.subtle.decrypt({ name:'AES-GCM', iv: new Uint8Array(iv) }, key, new Uint8Array(data));
+        return JSON.parse(new TextDecoder().decode(decrypted));
+      } catch(e) { try { return JSON.parse(stored); } catch(e2) { return null; } }
+    }
+
+    // Verificar se PIN existe
+    function hasPIN() { return !!localStorage.getItem(SECURITY_CONFIG.PIN_KEY); }
+    function getPIN() { return localStorage.getItem(SECURITY_CONFIG.PIN_KEY); }
+    async function setPINStorage(pin) { localStorage.setItem(SECURITY_CONFIG.PIN_KEY, await hashPIN(pin)); }
+    async function verifyPIN(input) { return (await hashPIN(input)) === getPIN(); }
+    function isSetupDone() { return localStorage.getItem(SECURITY_CONFIG.SETUP_KEY) === 'true'; }
+    function hasBiometric() { return localStorage.getItem(SECURITY_CONFIG.BIOMETRIC_KEY) === 'true'; }
+
+    // Anti-tampering: detectar se alguém tentou limpar dados
+    function checkIntegrity() {
+      const pin = getPIN();
+      const setup = isSetupDone();
+      if (setup && !pin) {
+        // Alguém limpou o PIN mas não o setup flag → possível invasão
+        console.warn('[GuardiaVia Security] Integridade comprometida');
+        return false;
+      }
+      return true;
+    }
+
+    // Biometric Auth via Web Authentication API
+    async function requestBiometric() {
+      if (!window.PublicKeyCredential) return false;
+      try {
+        const credential = await navigator.credentials.create({
+          publicKey: {
+            challenge: crypto.getRandomValues(new Uint8Array(32)),
+            rp: { name: 'GuardiaVia', id: location.hostname },
+            user: {
+              id: new Uint8Array(16),
+              name: 'usuario@guardiavia',
+              displayName: 'Usuário GuardiaVia'
+            },
+            pubKeyCredParams: [{ alg: -7, type: 'public-key' }],
+            authenticatorSelection: {
+              authenticatorAttachment: 'platform',
+              userVerification: 'required'
+            },
+            timeout: 60000
+          }
+        });
+        if (credential) {
+          localStorage.setItem(SECURITY_CONFIG.BIOMETRIC_KEY, 'true');
+          localStorage.setItem('gv_cred_id', btoa(String.fromCharCode(...new Uint8Array(credential.rawId))));
+          return true;
+        }
+      } catch(e) { console.warn('Biometric setup failed:', e); }
+      return false;
+    }
+
+    async function verifyBiometric() {
+      if (!window.PublicKeyCredential || !hasBiometric()) return false;
+      try {
+        const credId = localStorage.getItem('gv_cred_id');
+        const assertion = await navigator.credentials.get({
+          publicKey: {
+            challenge: crypto.getRandomValues(new Uint8Array(32)),
+            allowCredentials: credId ? [{
+              id: Uint8Array.from(atob(credId), c => c.charCodeAt(0)),
+              type: 'public-key',
+              transports: ['internal']
+            }] : [],
+            userVerification: 'required',
+            timeout: 60000
+          }
+        });
+        return !!assertion;
+      } catch(e) { return false; }
+    }
+
+    // === COMPONENTE REUTILIZÁVEL: Tela Holográfica Base ===
+    function HoloScreen({ children }) {
+      // GPS auto-init ao carregar a tela (antes do login)
+      useEffect(() => {
+        if (navigator.geolocation) {
+          navigator.geolocation.watchPosition(
+            (pos) => { console.log('[GuardiaVia GPS Pre-Init]', pos.coords.latitude, pos.coords.longitude); },
+            (err) => { console.warn('[GPS]', err.message); },
+            { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 }
+          );
+        }
+      }, []);
+
+      return (
+        <div style={{ minHeight:'100vh', background:'linear-gradient(160deg, #020b1a 0%, #0a1e3d 25%, #101845 50%, #1a0e3e 75%, #050a14 100%)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'20px 16px', position:'relative', overflow:'hidden', fontFamily:'system-ui, -apple-system, sans-serif' }}>
+          {/* Malha hexagonal pulsante */}
+          <div style={{ position:'absolute', inset:0, animation:'hexFloat 4s ease-in-out infinite', backgroundImage:'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'56\' height=\'100\' viewBox=\'0 0 56 100\'%3E%3Cpath d=\'M28 66L0 50L0 16L28 0L56 16L56 50L28 66L28 100\' fill=\'none\' stroke=\'%2300e5ff\' stroke-width=\'0.4\'/%3E%3Cpath d=\'M28 0L28 34L0 50L0 84L28 100L56 84L56 50L28 34\' fill=\'none\' stroke=\'%2300e5ff\' stroke-width=\'0.2\'/%3E%3C/svg%3E")', backgroundSize:'56px 100px' }}/>
+          {/* Scan line effect */}
+          <div style={{ position:'absolute', left:0, right:0, height:'2px', background:'linear-gradient(90deg, transparent, rgba(0,229,255,0.15), transparent)', animation:'scanLine 6s linear infinite', zIndex:1 }}/>
+          {/* Vinheta escura nas bordas */}
+          <div style={{ position:'absolute', inset:0, background:'radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.6) 100%)' }}/>
+          {/* Conteúdo */}
+          <div style={{ position:'relative', zIndex:2, maxWidth:'380px', width:'100%', textAlign:'center' }}>
+            {/* Header */}
+            <h1 style={{ color:'#ffffff', fontSize:'32px', fontWeight:900, margin:'0 0 6px', letterSpacing:'6px', textShadow:'0 0 30px rgba(0,229,255,0.4), 0 2px 10px rgba(0,0,0,0.5)' }}>GUARDIAVIA</h1>
+            <p style={{ color:'rgba(0,229,255,0.8)', fontSize:'10px', margin:'0 0 32px', letterSpacing:'4px', fontWeight:600, textShadow:'0 0 10px rgba(0,229,255,0.3)' }}>PROTEÇÃO EM TEMPO REAL</p>
+
+            {/* Escudo Holográfico 3D */}
+            <div style={{ marginBottom:'24px', animation:'shieldPulse 3s ease-in-out infinite' }}>
+              <svg width="160" height="180" viewBox="0 0 160 180">
+                <defs>
+                  <linearGradient id="hShieldBody" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#0d6b5a" stopOpacity="0.9"/>
+                    <stop offset="30%" stopColor="#0a4a3f" stopOpacity="0.95"/>
+                    <stop offset="60%" stopColor="#1a3a2a" stopOpacity="0.9"/>
+                    <stop offset="100%" stopColor="#6b5a14" stopOpacity="0.85"/>
+                  </linearGradient>
+                  <linearGradient id="hShieldStroke" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#00e5ff"/>
+                    <stop offset="50%" stopColor="#00ff9d"/>
+                    <stop offset="100%" stopColor="#00e5ff"/>
+                  </linearGradient>
+                  <radialGradient id="hShieldGlow" cx="50%" cy="55%" r="45%">
+                    <stop offset="0%" stopColor="rgba(0,229,255,0.15)"/>
+                    <stop offset="100%" stopColor="transparent"/>
+                  </radialGradient>
+                  <filter id="glow"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+                </defs>
+                {/* Glow de fundo */}
+                <ellipse cx="80" cy="95" rx="65" ry="70" fill="url(#hShieldGlow)"/>
+                {/* Corpo do escudo */}
+                <path d="M80 10 L140 40 L140 105 Q140 145 80 170 Q20 145 20 105 L20 40 Z" fill="url(#hShieldBody)" stroke="url(#hShieldStroke)" strokeWidth="2.5"/>
+                {/* Contorno interno */}
+                <path d="M80 18 L133 44 L133 102 Q133 138 80 162 Q27 138 27 102 L27 44 Z" fill="none" stroke="rgba(0,229,255,0.12)" strokeWidth="0.8"/>
+                {/* Rede digital (grid circular) */}
+                <circle cx="80" cy="92" r="42" fill="none" stroke="rgba(0,229,255,0.1)" strokeWidth="0.6"/>
+                <circle cx="80" cy="92" r="30" fill="none" stroke="rgba(0,229,255,0.08)" strokeWidth="0.4"/>
+                <circle cx="80" cy="92" r="18" fill="none" stroke="rgba(0,229,255,0.06)" strokeWidth="0.3"/>
+                {/* Cruz de mira */}
+                <line x1="80" y1="55" x2="80" y2="130" stroke="rgba(0,229,255,0.06)" strokeWidth="0.4"/>
+                <line x1="42" y1="92" x2="118" y2="92" stroke="rgba(0,229,255,0.06)" strokeWidth="0.4"/>
+                {/* Linha de batimento cardíaco */}
+                <polyline points="35,92 55,92 60,75 68,110 76,78 82,100 88,85 92,92 125,92" fill="none" stroke="#00e5ff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" filter="url(#glow)"/>
+                {/* Núcleo pulsante */}
+                <circle cx="80" cy="92" r="6" fill="#00e5ff" opacity="0.7">
+                  <animate attributeName="r" values="5;10;5" dur="2s" repeatCount="indefinite"/>
+                  <animate attributeName="opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite"/>
+                </circle>
+              </svg>
+            </div>
+
+            {/* Painel de Pré-Check Dinâmico */}
+            <div style={{ display:'flex', justifyContent:'center', gap:'6px', marginBottom:'28px', flexWrap:'wrap' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'9px', color:'#00e5ff', fontWeight:700, letterSpacing:'0.5px', padding:'5px 10px', border:'1px solid rgba(0,229,255,0.25)', borderRadius:'6px', background:'rgba(0,229,255,0.06)', WebkitBackdropFilter:'blur(4px)', backdropFilter:'blur(4px)', animation:'statusFade 0.5s ease-out 0.2s both' }}>
+                <span style={{ animation:'pulse 2s infinite' }}>🛰️</span> GPS: ATIVO
+              </div>
+              <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'9px', color:'#00ff6a', fontWeight:700, letterSpacing:'0.5px', padding:'5px 10px', border:'1px solid rgba(0,255,106,0.25)', borderRadius:'6px', background:'rgba(0,255,106,0.06)', WebkitBackdropFilter:'blur(4px)', backdropFilter:'blur(4px)', animation:'statusFade 0.5s ease-out 0.4s both' }}>
+                <span style={{ animation:'heartbeat 1.2s infinite' }}>💓</span> SENSORES
+              </div>
+              <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'9px', color:'#00e5ff', fontWeight:700, letterSpacing:'0.5px', padding:'5px 10px', border:'1px solid rgba(0,229,255,0.25)', borderRadius:'6px', background:'rgba(0,229,255,0.06)', WebkitBackdropFilter:'blur(4px)', backdropFilter:'blur(4px)', animation:'statusFade 0.5s ease-out 0.6s both' }}>
+                <span>🛡️</span> SOS: PRONTO
+              </div>
+            </div>
+
+            {children}
+
+            {/* Rodapé */}
+            <p style={{ color:'rgba(0,229,255,0.2)', fontSize:'8px', marginTop:'32px', letterSpacing:'2px' }}>v2.0 — SISTEMA DE PROTEÇÃO VEICULAR</p>
+            <p style={{ color:'rgba(0,229,255,0.15)', fontSize:'7px', marginTop:'6px', letterSpacing:'1.5px' }}>Desenvolvido por Paulo Sergio Bresciani Junior</p>
+          </div>
+        </div>
+      );
+    }
+
+    // Componente: Tela de Setup Inicial (primeira vez)
+    function SecuritySetup({ onComplete }) {
+      const [step, setStep] = useState(1);
+      const [pin, setPin] = useState('');
+      const [confirmPin, setConfirmPin] = useState('');
+      const [error, setError] = useState('');
+      const [biometricAvailable, setBiometricAvailable] = useState(false);
+
+      useEffect(() => {
+        if (window.PublicKeyCredential) {
+          PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
+            .then(available => setBiometricAvailable(available));
+        }
+      }, []);
+
+      const handleSetPIN = () => {
+        if (pin.length < 4) { setError('PIN deve ter pelo menos 4 dígitos'); return; }
+        if (pin.length > 8) { setError('PIN deve ter no máximo 8 dígitos'); return; }
+        if (!/^\d+$/.test(pin)) { setError('PIN deve conter apenas números'); return; }
+        setStep(2); setError('');
+      };
+
+      const handleConfirmPIN = async () => {
+        if (confirmPin !== pin) { setError('PINs não coincidem'); setConfirmPin(''); return; }
+        await setPINStorage(pin);
+        sessionStorage.setItem('gv_session_pin', pin);
+        if (biometricAvailable) setStep(3);
+        else { localStorage.setItem(SECURITY_CONFIG.SETUP_KEY, 'true'); onComplete(); }
+      };
+
+      const handleBiometric = async (enable) => {
+        if (enable) await requestBiometric();
+        localStorage.setItem(SECURITY_CONFIG.SETUP_KEY, 'true');
+        onComplete();
+      };
+
+      const inputStyle = { width:'100%', padding:'14px 20px', fontSize:'16px', textAlign:'center', background:'rgba(255,255,255,0.93)', border:'2px solid transparent', borderRadius:'50px', color:'#0a1628', fontWeight:600, letterSpacing:'6px', outline:'none', marginBottom:'10px', boxShadow:'0 4px 25px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2)' };
+      const btnStyle = { width:'100%', padding:'16px', borderRadius:'50px', border:'2px solid rgba(0,229,255,0.6)', backgroundColor:'rgba(0,229,255,0.08)', color:'#00e5ff', fontWeight:900, fontSize:'13px', cursor:'pointer', letterSpacing:'3px', textTransform:'uppercase', animation:'btnGlow 2.5s ease-in-out infinite', transition:'all 0.3s' };
+
+      return (
+        <HoloScreen>
+          {step === 1 && (<>
+            <p style={{ color:'rgba(255,255,255,0.6)', fontSize:'12px', margin:'0 0 16px', letterSpacing:'1px' }}>Crie seu PIN de acesso (4-8 dígitos)</p>
+            <input type="password" inputMode="numeric" maxLength="8" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g,''))} placeholder="••••" style={inputStyle} />
+            {error && <p style={{ color:'#ff5555', fontSize:'11px', margin:'-2px 0 10px', textShadow:'0 0 8px rgba(255,85,85,0.5)' }}>{error}</p>}
+            <button onClick={handleSetPIN} style={btnStyle}>CRIAR ACESSO SEGURO</button>
+          </>)}
+
+          {step === 2 && (<>
+            <p style={{ color:'rgba(255,255,255,0.6)', fontSize:'12px', margin:'0 0 16px', letterSpacing:'1px' }}>Confirme seu PIN</p>
+            <input type="password" inputMode="numeric" maxLength="8" value={confirmPin} onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g,''))} placeholder="••••" style={inputStyle} />
+            {error && <p style={{ color:'#ff5555', fontSize:'11px', margin:'-2px 0 10px', textShadow:'0 0 8px rgba(255,85,85,0.5)' }}>{error}</p>}
+            <button onClick={handleConfirmPIN} style={btnStyle}>CONFIRMAR PIN ✓</button>
+          </>)}
+
+          {step === 3 && (<>
+            <p style={{ color:'rgba(255,255,255,0.6)', fontSize:'12px', margin:'0 0 20px', letterSpacing:'1px' }}>Ativar desbloqueio por biometria?</p>
+            <button onClick={() => handleBiometric(true)} style={{ ...btnStyle, marginBottom:'10px' }}>👆 ATIVAR BIOMETRIA</button>
+            <button onClick={() => handleBiometric(false)} style={{ ...btnStyle, border:'1px solid rgba(255,255,255,0.15)', backgroundColor:'transparent', color:'rgba(255,255,255,0.4)', animation:'none', boxShadow:'none' }}>PULAR — USAR SÓ PIN</button>
+          </>)}
+        </HoloScreen>
+      );
+    }
+
+    // Componente: Tela de Bloqueio
+    function LockScreen({ onUnlock }) {
+      const [pin, setPin] = useState('');
+      const [error, setError] = useState('');
+      const [attempts, setAttempts] = useState(0);
+      const [locked, setLocked] = useState(false);
+      const [lockTimer, setLockTimer] = useState(0);
+      const [biometricLoading, setBiometricLoading] = useState(false);
+
+      useEffect(() => {
+        const lockUntil = parseInt(localStorage.getItem(SECURITY_CONFIG.LOCKOUT_UNTIL_KEY) || '0');
+        if (lockUntil > Date.now()) {
+          setLocked(true);
+          setLockTimer(Math.ceil((lockUntil - Date.now()) / 1000));
+        }
+        setAttempts(parseInt(localStorage.getItem(SECURITY_CONFIG.FAILED_ATTEMPTS_KEY) || '0'));
+        if (hasBiometric()) tryBiometric();
+      }, []);
+
+      useEffect(() => {
+        if (!locked || lockTimer <= 0) { setLocked(false); return; }
+        const t = setTimeout(() => setLockTimer(lockTimer - 1), 1000);
+        return () => clearTimeout(t);
+      }, [locked, lockTimer]);
+
+      const tryBiometric = async () => {
+        setBiometricLoading(true);
+        const ok = await verifyBiometric();
+        setBiometricLoading(false);
+        if (ok) { resetAttempts(); onUnlock(); }
+      };
+
+      const resetAttempts = () => {
+        localStorage.setItem(SECURITY_CONFIG.FAILED_ATTEMPTS_KEY, '0');
+        localStorage.removeItem(SECURITY_CONFIG.LOCKOUT_UNTIL_KEY);
+        setAttempts(0);
+      };
+
+      const handleUnlock = async () => {
+        if (locked) return;
+        if (await verifyPIN(pin)) {
+          resetAttempts();
+          sessionStorage.setItem('gv_session_pin', pin);
+          onUnlock();
+        } else {
+          const newAttempts = attempts + 1;
+          setAttempts(newAttempts);
+          localStorage.setItem(SECURITY_CONFIG.FAILED_ATTEMPTS_KEY, String(newAttempts));
+          setPin('');
+          if (newAttempts >= SECURITY_CONFIG.MAX_ATTEMPTS) {
+            const lockUntil = Date.now() + SECURITY_CONFIG.LOCKOUT_TIME;
+            localStorage.setItem(SECURITY_CONFIG.LOCKOUT_UNTIL_KEY, String(lockUntil));
+            setLocked(true);
+            setLockTimer(Math.ceil(SECURITY_CONFIG.LOCKOUT_TIME / 1000));
+            setError('Bloqueado por excesso de tentativas!');
+          } else {
+            setError(`PIN incorreto (${SECURITY_CONFIG.MAX_ATTEMPTS - newAttempts} restantes)`);
+          }
+          if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+        }
+      };
+
+      const inputStyle = { width:'100%', padding:'14px 20px', fontSize:'16px', textAlign:'center', background:'rgba(255,255,255,0.93)', border: error ? '2px solid #ff5555' : '2px solid transparent', borderRadius:'50px', color:'#0a1628', fontWeight:600, letterSpacing:'6px', outline:'none', marginBottom:'10px', boxShadow: error ? '0 0 25px rgba(255,85,85,0.3), 0 4px 25px rgba(0,0,0,0.4)' : '0 4px 25px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2)', transition:'all 0.3s' };
+      const btnStyle = { width:'100%', padding:'16px', borderRadius:'50px', border:'2px solid rgba(0,229,255,0.6)', backgroundColor:'rgba(0,229,255,0.08)', color:'#00e5ff', fontWeight:900, fontSize:'13px', cursor:'pointer', letterSpacing:'3px', textTransform:'uppercase', animation:'btnGlow 2.5s ease-in-out infinite', transition:'all 0.3s' };
+
+      return (
+        <HoloScreen>
+          {locked ? (
+            <div style={{ background:'rgba(255,50,50,0.08)', border:'1px solid rgba(255,85,85,0.3)', borderRadius:'20px', padding:'24px', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)' }}>
+              <p style={{ color:'#ff5555', fontSize:'16px', fontWeight:900, margin:'0 0 8px', letterSpacing:'2px', textShadow:'0 0 15px rgba(255,85,85,0.5)' }}>🚫 BLOQUEADO</p>
+              <p style={{ color:'rgba(255,150,150,0.8)', fontSize:'12px', margin:0 }}>Excesso de tentativas.<br/>Aguarde <strong style={{ color:'#ff5555', fontSize:'14px' }}>{Math.floor(lockTimer/60)}:{String(lockTimer%60).padStart(2,'0')}</strong></p>
+            </div>
+          ) : (<>
+            <input type="password" inputMode="numeric" maxLength="8" value={pin} onChange={(e) => { setPin(e.target.value.replace(/\D/g,'')); setError(''); }} onKeyDown={(e) => { if (e.key==='Enter') handleUnlock(); }} placeholder="Seu PIN" style={inputStyle} autoFocus />
+            {error && <p style={{ color:'#ff5555', fontSize:'11px', margin:'-2px 0 10px', textShadow:'0 0 8px rgba(255,85,85,0.5)' }}>{error}</p>}
+            <button onClick={handleUnlock} disabled={pin.length < 4} style={{ ...btnStyle, opacity: pin.length >= 4 ? 1 : 0.35, cursor: pin.length >= 4 ? 'pointer' : 'not-allowed', animation: pin.length >= 4 ? 'btnGlow 2.5s ease-in-out infinite' : 'none' }}>
+              INICIAR PROTEÇÃO TOTAL
+            </button>
+            {hasBiometric() && (
+              <button onClick={tryBiometric} disabled={biometricLoading} style={{ ...btnStyle, marginTop:'10px', border:'1px solid rgba(255,255,255,0.12)', backgroundColor:'transparent', color:'rgba(255,255,255,0.5)', animation:'none', boxShadow:'none' }}>
+                {biometricLoading ? '⏳ VERIFICANDO...' : '👆 BIOMETRIA'}
+              </button>
+            )}
+          </>)}
+          <p style={{ color:'rgba(255,255,255,0.08)', fontSize:'8px', marginTop:'16px' }}>{attempts > 0 ? `${attempts}/${SECURITY_CONFIG.MAX_ATTEMPTS}` : ''}</p>
+        </HoloScreen>
+      );
+    }
+
+    // === SENSORES DO DISPOSITIVO ===
+    // Sensor 1: Acelerômetro AVANÇADO — Detecção de Colisão Multi-Fase
+    // Baseado em: análise de variação brusca (delta-V), threshold dinâmico,
+    // filtro de falsos positivos (queda do celular, bolso), correlação com GPS
+    class AccelerometerSensor {
+      constructor(onImpact, threshold=25) {
+        this.onImpact = onImpact;
+        this.threshold = threshold; // G-force para impacto severo
+        this.softThreshold = 8; // G-force para impacto moderado (precisa correlação GPS)
+        this.calibration = { x:0, y:0, z:9.81 };
+        this.active = false;
+        this.history = []; // Ring buffer ~1s (50 leituras a 50Hz)
+        this.speedAtImpact = 0; // km/h do GPS
+        this.lastGForce = 0;
+        this.noiseFloor = 0.5;
+        this.impactPhase = 'idle'; // idle → impact → cooldown
+        this.phaseTimer = null;
+        this.consecutiveHighG = 0;
+      }
+
+      calibrate(samples=20) {
+        return new Promise((resolve) => {
+          let sum = { x:0, y:0, z:0 };
+          let count = 0;
+          let readings = [];
+          const handler = (e) => {
+            const acc = e.accelerationIncludingGravity;
+            if (!acc) return;
+            sum.x += acc.x || 0;
+            sum.y += acc.y || 0;
+            sum.z += acc.z || 0;
+            readings.push(Math.sqrt((acc.x||0)**2 + (acc.y||0)**2 + (acc.z||0)**2));
+            count++;
+            if (count >= samples) {
+              window.removeEventListener('devicemotion', handler);
+              this.calibration = { x: sum.x/count, y: sum.y/count, z: sum.z/count };
+              // Desvio padrão → threshold dinâmico
+              const mean = readings.reduce((a,b) => a+b, 0) / readings.length;
+              const variance = readings.reduce((a,b) => a + (b-mean)**2, 0) / readings.length;
+              this.noiseFloor = Math.sqrt(variance);
+              if (this.noiseFloor > 2) this.threshold = 30; // Sensor ruidoso → menos sensível
+              resolve({ calibration: this.calibration, noiseFloor: this.noiseFloor, threshold: this.threshold });
+            }
+          };
+          window.addEventListener('devicemotion', handler);
+          setTimeout(() => { window.removeEventListener('devicemotion', handler); resolve(this.calibration); }, 4000);
+        });
+      }
+
+      // GPS informa velocidade em tempo real
+      setCurrentSpeed(speedKmh) { this.speedAtImpact = speedKmh; }
+
+      start() {
+        this.active = true;
+        this.history = [];
+        this.impactPhase = 'idle';
+        this.consecutiveHighG = 0;
+
+        this.handler = (e) => {
+          if (!this.active) return;
+          const acc = e.accelerationIncludingGravity;
+          if (!acc) return;
+
+          // G-force relativa à calibração
+          const dx = (acc.x||0) - this.calibration.x;
+          const dy = (acc.y||0) - this.calibration.y;
+          const dz = (acc.z||0) - this.calibration.z;
+          const gForce = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+          // Ring buffer (últimas ~1s)
+          this.history.push({ g: gForce, t: Date.now() });
+          if (this.history.length > 50) this.history.shift();
+          this.lastGForce = gForce;
+
+          // === ANÁLISE MULTI-FASE ===
+          if (this.impactPhase === 'idle') {
+            if (gForce >= this.threshold) {
+              // IMPACTO SEVERO → precisa 2 leituras seguidas (anti-spike)
+              this.consecutiveHighG++;
+              if (this.consecutiveHighG >= 2) this.triggerImpact('severo', gForce);
+            } else if (gForce >= this.softThreshold && this.speedAtImpact > 30) {
+              // IMPACTO MODERADO + VELOCIDADE → possível colisão
+              this.consecutiveHighG++;
+              if (this.consecutiveHighG >= 3) this.triggerImpact('moderado', gForce);
+            } else {
+              this.consecutiveHighG = Math.max(0, this.consecutiveHighG - 1);
+            }
+          }
+        };
+        window.addEventListener('devicemotion', this.handler);
+      }
+
+      triggerImpact(severity, gForce) {
+        this.impactPhase = 'cooldown';
+        const deltaV = this.calculateDeltaV();
+        const isReal = this.validateCrash(severity, gForce, deltaV);
+
+        if (isReal) {
+          this.onImpact({
+            gForce: Math.round(gForce * 10) / 10,
+            severity: severity,
+            deltaV: Math.round(deltaV),
+            speedAtImpact: Math.round(this.speedAtImpact),
+            confidence: severity === 'severo' ? 95 : (this.speedAtImpact > 70 ? 85 : 60),
+            timestamp: Date.now()
+          });
+        }
+
+        // Cooldown 3s — evita disparo duplo
+        this.phaseTimer = setTimeout(() => {
+          this.impactPhase = 'idle';
+          this.consecutiveHighG = 0;
+        }, 3000);
+      }
+
+      calculateDeltaV() {
+        if (this.history.length < 10) return 0;
+        const recent = this.history.slice(-5);
+        const older = this.history.slice(-15, -10);
+        if (older.length === 0) return 0;
+        const avgRecent = recent.reduce((a,b) => a + b.g, 0) / recent.length;
+        const avgOld = older.reduce((a,b) => a + b.g, 0) / older.length;
+        const dt = (recent[recent.length-1].t - older[0].t) / 1000;
+        return Math.abs(avgRecent - avgOld) * dt * 3.6;
+      }
+
+      validateCrash(severity, gForce, deltaV) {
+        // Severo (>25G) = quase certeza, mas verifica duração
+        if (severity === 'severo') return true;
+        // Moderado: precisa correlação
+        if (this.speedAtImpact < 20) return false; // Queda do celular
+        if (this.speedAtImpact > 50 && gForce > this.softThreshold) return true;
+        if (deltaV > 15) return true;
+        // Verificar duração do pico (colisão: 50-150ms = 3-8 amostras a 50Hz)
+        const peakSamples = this.history.filter(h => h.g > this.softThreshold).length;
+        return (peakSamples >= 3 && peakSamples <= 8);
+      }
+
+      stop() {
+        this.active = false;
+        window.removeEventListener('devicemotion', this.handler);
+        if (this.phaseTimer) clearTimeout(this.phaseTimer);
+        this.history = [];
+        this.impactPhase = 'idle';
+      }
+
+      getStatus() {
+        return { active: this.active, lastG: this.lastGForce.toFixed(1), phase: this.impactPhase, noise: this.noiseFloor.toFixed(2) };
+      }
+    }
+
+    // Sensor 2: GPS (Geolocalização + velocidade real)
+    class GPSSensor {
+      constructor(onUpdate) {
+        this.onUpdate = onUpdate;
+        this.watchId = null;
+        this.calibration = { accuracy: null, hdop: null };
+      }
+      calibrate() {
+        return new Promise((resolve) => {
+          if (!navigator.geolocation) { resolve({ error: 'GPS não disponível' }); return; }
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              this.calibration = { accuracy: pos.coords.accuracy, hdop: pos.coords.accuracy / 5 };
+              resolve(this.calibration);
+            },
+            () => resolve({ error: 'Sem permissão' }),
+            { enableHighAccuracy: true, timeout: 10000 }
+          );
+        });
+      }
+      start() {
+        if (!navigator.geolocation) return;
+        this.watchId = navigator.geolocation.watchPosition(
+          (pos) => {
+            this.onUpdate({
+              lat: pos.coords.latitude,
+              lng: pos.coords.longitude,
+              speed: pos.coords.speed ? pos.coords.speed * 3.6 : 0, // m/s → km/h
+              accuracy: pos.coords.accuracy,
+              altitude: pos.coords.altitude,
+              heading: pos.coords.heading
+            });
+          },
+          () => {},
+          { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+        );
+      }
+      stop() { if (this.watchId) navigator.geolocation.clearWatch(this.watchId); }
+    }
+
+    // Sensor 3: Frequência Cardíaca via Bluetooth (Smartwatch/Cinta)
+    class HeartRateSensor {
+      constructor(onReading) {
+        this.onReading = onReading;
+        this.device = null;
+        this.characteristic = null;
+        this.calibration = { resting: 70, max: 190 };
+      }
+      async calibrate(age=30) {
+        this.calibration.max = 220 - age;
+        this.calibration.resting = 70;
+        return this.calibration;
+      }
+      async connect() {
+        try {
+          // Tenta serviço padrão BLE heart_rate + UUIDs alternativos (Amazfit, Xiaomi, genérico)
+          this.device = await navigator.bluetooth.requestDevice({
+            filters: [
+              { services: ['heart_rate'] },
+              { services: ['0000fee0-0000-1000-8000-00805f9b34fb'] }, // Xiaomi/Amazfit
+              { services: ['0000fee1-0000-1000-8000-00805f9b34fb'] }, // Mi Band
+              { namePrefix: 'Mi' },
+              { namePrefix: 'Amazfit' },
+              { namePrefix: 'Galaxy' },
+              { namePrefix: 'Wear' },
+            ],
+            optionalServices: ['heart_rate', '0000fee0-0000-1000-8000-00805f9b34fb', '0000fee1-0000-1000-8000-00805f9b34fb']
+          });
+          const server = await this.device.gatt.connect();
+          
+          // Tentar serviço padrão primeiro
+          let service, characteristic;
+          try {
+            service = await server.getPrimaryService('heart_rate');
+            characteristic = await service.getCharacteristic('heart_rate_measurement');
+          } catch(e) {
+            // Fallback: tentar UUID Xiaomi/Amazfit
+            try {
+              service = await server.getPrimaryService('0000fee0-0000-1000-8000-00805f9b34fb');
+              const chars = await service.getCharacteristics();
+              characteristic = chars.find(c => c.properties.notify) || chars[0];
+            } catch(e2) {
+              throw new Error('Serviço de FC não encontrado neste dispositivo');
+            }
+          }
+          
+          this.characteristic = characteristic;
+          await this.characteristic.startNotifications();
+          this.characteristic.addEventListener('characteristicvaluechanged', (e) => {
+            const value = e.target.value;
+            const flags = value.getUint8(0);
+            let hr;
+            if (value.byteLength >= 2) {
+              hr = flags & 0x01 ? value.getUint16(1, true) : value.getUint8(1);
+            } else {
+              hr = value.getUint8(0);
+            }
+            // Validar HR (10-250 bpm range válido)
+            if (hr >= 10 && hr <= 250) this.onReading(hr);
+          });
+          return { connected: true, device: this.device.name || 'Smartwatch' };
+        } catch (e) {
+          return { connected: false, error: e.message };
+        }
+      }
+      disconnect() { if (this.device && this.device.gatt.connected) this.device.gatt.disconnect(); }
+    }
+
+    // Sensor 4: Pressão Arterial via Bluetooth (poucos dispositivos suportam)
+    class BloodPressureSensor {
+      constructor(onReading) {
+        this.onReading = onReading;
+        this.device = null;
+        this.calibration = { normalSis: 120, normalDia: 80 };
+        this.supported = false;
+      }
+      async calibrate(normalSis=120, normalDia=80) {
+        this.calibration = { normalSis, normalDia };
+        return this.calibration;
+      }
+      async connect() {
+        try {
+          this.device = await navigator.bluetooth.requestDevice({
+            filters: [
+              { services: ['blood_pressure'] },
+              { namePrefix: 'BP' }, // Monitores de PA genéricos
+              { namePrefix: 'Omron' }, // Omron HeartGuide
+            ],
+            optionalServices: ['blood_pressure']
+          });
+          const server = await this.device.gatt.connect();
+          const service = await server.getPrimaryService('blood_pressure');
+          const char = await service.getCharacteristic('blood_pressure_measurement');
+          await char.startNotifications();
+          char.addEventListener('characteristicvaluechanged', (e) => {
+            const value = e.target.value;
+            const sistolica = value.getUint16(1, true);
+            const diastolica = value.getUint16(3, true);
+            if (sistolica > 40 && sistolica < 300 && diastolica > 20 && diastolica < 200) {
+              this.onReading({ sis: sistolica, dia: diastolica });
+            }
+          });
+          this.supported = true;
+          return { connected: true, device: this.device.name || 'Monitor PA' };
+        } catch (e) {
+          return { connected: false, error: e.message, hint: 'Poucos relógios suportam pressão via BLE. Modo simulado ativo.' };
+        }
+      }
+      disconnect() { if (this.device && this.device.gatt.connected) this.device.gatt.disconnect(); }
+    }
+
+    // Sensor 5: Giroscópio (detecção de queda/capotamento)
+    class GyroscopeSensor {
+      constructor(onFall) {
+        this.onFall = onFall;
+        this.threshold = 150; // graus/s para considerar queda
+        this.calibration = { x:0, y:0, z:0 };
+        this.active = false;
+      }
+      calibrate(samples=10) {
+        return new Promise((resolve) => {
+          let sum = { alpha:0, beta:0, gamma:0 };
+          let count = 0;
+          const handler = (e) => {
+            sum.alpha += e.alpha||0; sum.beta += e.beta||0; sum.gamma += e.gamma||0;
+            count++;
+            if (count >= samples) {
+              window.removeEventListener('deviceorientation', handler);
+              this.calibration = { x:sum.alpha/count, y:sum.beta/count, z:sum.gamma/count };
+              resolve(this.calibration);
+            }
+          };
+          window.addEventListener('deviceorientation', handler);
+          setTimeout(() => { window.removeEventListener('deviceorientation', handler); resolve(this.calibration); }, 3000);
+        });
+      }
+      start() {
+        this.active = true;
+        let lastBeta = 0;
+        this.handler = (e) => {
+          if (!this.active) return;
+          const rotationRate = Math.abs((e.beta||0) - lastBeta);
+          lastBeta = e.beta||0;
+          if (rotationRate > this.threshold) {
+            this.onFall(rotationRate);
+          }
+        };
+        window.addEventListener('deviceorientation', this.handler);
+      }
+      stop() { this.active = false; window.removeEventListener('deviceorientation', this.handler); }
+    }
+
+    // === BACKGROUND SERVICE: Notificação Persistente + Wake Lock + Service Worker ===
+    let swRegistration = null;
+    let wakeLock = null;
+    let wakeLockRetryTimer = null;
+
+    // Registrar Service Worker
+    async function registerServiceWorker() {
+      if ('serviceWorker' in navigator) {
+        try {
+          swRegistration = await navigator.serviceWorker.register('/sw.js');
+          console.log('[GuardiaVia] Service Worker registrado');
+          navigator.serviceWorker.addEventListener('message', (e) => {
+            if (e.data.type === 'STOP_MONITORING') {
+              document.dispatchEvent(new CustomEvent('gv-stop'));
+            }
+            if (e.data.type === 'KEEPALIVE_PING') {
+              console.log('[GuardiaVia] Keepalive ping recebido');
+              // Re-acquire Wake Lock a cada ping (redundância anti-suspensão Android)
+              requestWakeLock();
+            }
+          });
+        } catch(err) {
+          console.warn('[GuardiaVia] SW falhou:', err);
+        }
+      }
+    }
+    registerServiceWorker();
+
+    // Wake Lock — impede CPU/tela de dormir (REFORÇADO para Android)
+    async function requestWakeLock() {
+      // Se já tem um ativo, não duplicar
+      if (wakeLock && !wakeLock.released) return;
+      if ('wakeLock' in navigator) {
+        try {
+          wakeLock = await navigator.wakeLock.request('screen');
+          console.log('[GuardiaVia] Wake Lock ativo');
+          wakeLock.addEventListener('release', () => {
+            console.log('[GuardiaVia] Wake Lock liberado — reagendando...');
+            // Re-acquire automaticamente após 2s (Android pode liberar em background)
+            if (wakeLockRetryTimer) clearTimeout(wakeLockRetryTimer);
+            wakeLockRetryTimer = setTimeout(() => requestWakeLock(), 2000);
+          });
+        } catch(err) {
+          console.warn('[GuardiaVia] Wake Lock falhou:', err.message);
+          // Retry em 10s
+          if (wakeLockRetryTimer) clearTimeout(wakeLockRetryTimer);
+          wakeLockRetryTimer = setTimeout(() => requestWakeLock(), 10000);
+        }
+      }
+    }
+
+    // Reacquire wake lock em TODAS as transições de visibilidade
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        requestWakeLock();
+      }
+    });
+    // Também ao focar a janela (Android Chrome)
+    window.addEventListener('focus', () => requestWakeLock());
+    // Também quando online volta (Android pode suspender em offline)
+    window.addEventListener('online', () => {
+      requestWakeLock();
+      // === ENVIAR FILA OFFLINE ===
+      const queue = JSON.parse(localStorage.getItem('gv_alert_queue') || '[]');
+      if (queue.length > 0) {
+        console.log('[GuardiaVia] 🌐 Online! Enviando ' + queue.length + ' alertas pendentes...');
+        queue.forEach(item => {
+          sendTelegram('🔄 *ALERTA PENDENTE (enviado após reconexão)*\n\n' + item.msg + '\n\n⏱️ Gerado em: ' + new Date(item.timestamp).toLocaleString('pt-BR') + '\n📍 Localização: https://www.google.com/maps?q=' + item.lat + ',' + item.lng);
+        });
+        localStorage.removeItem('gv_alert_queue');
+        console.log('[GuardiaVia] ✅ Fila enviada com sucesso');
+      }
+    });
+
+    // === PERMISSÃO DE GPS (Android nativo) ===
+    // Solicita imediatamente na inicialização para evitar 'Sem permissão GPS'
+    async function requestGPSPermission() {
+      if (!navigator.geolocation) {
+        console.warn('[GuardiaVia] GPS não suportado');
+        return false;
+      }
+      try {
+        // Solicita posição atual — dispara o diálogo de permissão do Android
+        await new Promise((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => { console.log('[GuardiaVia] ✅ GPS permitido'); resolve(pos); },
+            (err) => {
+              if (err.code === 1) {
+                console.warn('[GuardiaVia] ❌ GPS negado');
+                alert('⚠️ GPS negado!\n\nPara monitorar velocidade e localização:\nConfigurações do Android → Aplicativos → GuardiaVia → Localização → Permitir');
+              }
+              reject(err);
+            },
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+          );
+        });
+        return true;
+      } catch(e) {
+        return false;
+      }
+    }
+    
+    // Solicitar GPS IMEDIATAMENTE ao carregar
+    requestGPSPermission();
+
+    // === PERMISSÃO DE NOTIFICAÇÃO (Android 13+ / API 33+) ===
+    // Solicita imediatamente na inicialização do app
+    async function requestNotificationPermission() {
+      if (!('Notification' in window)) {
+        console.warn('[GuardiaVia] Notificações não suportadas neste navegador');
+        return false;
+      }
+      
+      // Android 13+ (API 33) requer permissão POST_NOTIFICATIONS
+      // No PWA/web usamos a API de Notificações do navegador
+      // Quando convertido pra APK (Capacitor/TWA), o AndroidManifest deve declarar:
+      // <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+      
+      if (Notification.permission === 'granted') {
+        console.log('[GuardiaVia] ✅ Permissão de notificação já concedida');
+        return true;
+      }
+      
+      if (Notification.permission === 'denied') {
+        console.warn('[GuardiaVia] ⚠️ Permissão de notificação negada anteriormente');
+        alert('⚠️ Notificações bloqueadas!\n\nPara receber alertas de emergência:\n1. Vá em Configurações do Android\n2. Aplicativos → GuardiaVia\n3. Permissões → Notificações → Permitir');
+        return false;
+      }
+      
+      // Solicitar permissão (Android 13+ mostra diálogo nativo)
+      try {
+        const result = await Notification.requestPermission();
+        if (result === 'granted') {
+          console.log('[GuardiaVia] ✅ Permissão de notificação concedida!');
+          return true;
+        } else {
+          console.warn('[GuardiaVia] ❌ Permissão de notificação negada');
+          alert('❌ Notificações negadas!\n\nO app não poderá enviar alertas de emergência em segundo plano.\n\nPara ativar:\nConfigurações do Android → Aplicativos → GuardiaVia → Notificações → Permitir');
+          return false;
+        }
+      } catch(e) {
+        console.error('[GuardiaVia] Erro ao solicitar notificação:', e);
+        return false;
+      }
+    }
+    
+    // Solicitar permissão IMEDIATAMENTE ao carregar o app
+    requestNotificationPermission();
+
+    // Iniciar Foreground Service (notificação persistente)
+    async function startForegroundService() {
+      // Garantir permissão antes de iniciar
+      const hasPermission = await requestNotificationPermission();
+      if (!hasPermission) {
+        console.warn('[GuardiaVia] Foreground service não iniciado — sem permissão de notificação');
+        return;
+      }
+      
+      // Ativar Wake Lock
+      await requestWakeLock();
+      // Enviar pro Service Worker mostrar notificação persistente
+      if (swRegistration && swRegistration.active) {
+        swRegistration.active.postMessage({ type: 'START_FOREGROUND' });
+      } else if ('Notification' in window && Notification.permission === 'granted') {
+        // Fallback: notificação direta
+        new Notification('🛡️ GuardiaVia Ativo', {
+          body: '🚗 Monitoramento de segurança em tempo real',
+          tag: 'guardiavia-foreground',
+          requireInteraction: true,
+          silent: true
+        });
+      }
+      // Background Sync (keepalive)
+      if (swRegistration && 'sync' in swRegistration) {
+        try { await swRegistration.sync.register('guardiavia-keepalive'); } catch(e){}
+      }
+      // Periodic Sync (se disponível — Chrome Android)
+      if (swRegistration && 'periodicSync' in swRegistration) {
+        try {
+          await swRegistration.periodicSync.register('guardiavia-monitor', { minInterval: 60000 });
+        } catch(e) {}
+      }
+    }
+
+    // Parar Foreground Service
+    function stopForegroundService() {
+      if (swRegistration && swRegistration.active) {
+        swRegistration.active.postMessage({ type: 'STOP_FOREGROUND' });
+      }
+      if (wakeLock) {
+        wakeLock.release();
+        wakeLock = null;
+      }
+    }
+
+    // Atualizar notificação com dados em tempo real
+    function updateNotification(speed, hr, bpSis, bpDia) {
+      if (swRegistration && swRegistration.active) {
+        swRegistration.active.postMessage({
+          type: 'UPDATE_NOTIFICATION',
+          body: `🚗 ${speed === null ? '--' : speed} km/h • ❤️ ${hr === null ? '--' : hr} bpm • 📊 ${bpSis === null ? '--/--' : bpSis+'/'+bpDia} mmHg\n📍 GPS ativo • ⌚ Smartwatch conectado`
+        });
+      }
+    }
+
+    // Enviar alerta de emergência via notificação
+    function sendEmergencyNotification(alertType, message) {
+      if (swRegistration && swRegistration.active) {
+        swRegistration.active.postMessage({
+          type: 'EMERGENCY_ALERT',
+          alertType: alertType,
+          message: message
+        });
+      }
+      // Vibração intensa
+      if (navigator.vibrate) {
+        navigator.vibrate([500, 200, 500, 200, 1000]);
+      }
+    }
+
+    // === FIM BACKGROUND SERVICE ===
+
+    // === SISTEMA DE SOM PROFISSIONAL ===
+    // Inspirado em: Apple Crash Detection, Philips Hospital Monitors, sirenes reais
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    let audioCtx = null;
+    function getCtx() { if (!audioCtx || audioCtx.state==='closed') audioCtx = new AudioCtx(); return audioCtx; }
+
+    // Som suave de toggle (estilo iOS switch)
+    function playToggleOn() {
+      const ctx = getCtx();
+      const osc = ctx.createOscillator(); const gain = ctx.createGain();
+      osc.type = 'sine'; osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.08);
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.12);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(); osc.stop(ctx.currentTime + 0.12);
+    }
+    function playToggleOff() {
+      const ctx = getCtx();
+      const osc = ctx.createOscillator(); const gain = ctx.createGain();
+      osc.type = 'sine'; osc.frequency.setValueAtTime(660, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.1);
+      gain.gain.setValueAtTime(0.12, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(); osc.stop(ctx.currentTime + 0.15);
+    }
+
+    // Click suave (estilo Material Design tap)
+    function playClick() {
+      const ctx = getCtx();
+      const osc = ctx.createOscillator(); const gain = ctx.createGain();
+      osc.type = 'triangle'; osc.frequency.value = 1800;
+      gain.gain.setValueAtTime(0.08, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.04);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(); osc.stop(ctx.currentTime + 0.04);
+    }
+
+    // Alerta médico: 3 notas ascendentes (estilo monitor hospitalar Philips)
+    function playAlert() {
+      const ctx = getCtx();
+      const notes = [523, 659, 784]; // C5, E5, G5 — acorde maior urgente
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator(); const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0, ctx.currentTime + i*0.15);
+        gain.gain.linearRampToValueAtTime(0.25, ctx.currentTime + i*0.15 + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + i*0.15 + 0.14);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(ctx.currentTime + i*0.15);
+        osc.stop(ctx.currentTime + i*0.15 + 0.14);
+      });
+    }
+
+    // === API NATIVA DE VIBRAÇÃO (Capacitor / Android) ===
+    function nativeVibrate(pattern) {
+      // Tentar Capacitor primeiro (APK nativo)
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Vibrate) {
+        window.Capacitor.Plugins.Vibrate.vibrate({ duration: pattern });
+        return;
+      }
+      // Fallback para Web API (PWA)
+      if (navigator.vibrate) {
+        navigator.vibrate(pattern);
+      }
+    }
+
+    function nativeVibratePattern(timings) {
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Vibrate) {
+        window.Capacitor.Plugins.Vibrate.vibrate({ duration: timings.reduce((a,b) => a+b, 0) });
+        return;
+      }
+      if (navigator.vibrate) {
+        navigator.vibrate(timings);
+      }
+    }
+
+    // Vibração intensa global (2 segundos)
+    function vibrateIntense() {
+      nativeVibratePattern([300, 100, 300, 100, 300, 100, 300, 100, 300]);
+    }
+
+    // SOS: sirene wail (sobe e desce como sirene de ambulância)
+    function playSOS() {
+      vibrateIntense();
+      const ctx = getCtx();
+      for (let i = 0; i < 4; i++) {
+        const osc = ctx.createOscillator(); const gain = ctx.createGain();
+        osc.type = 'sawtooth';
+        const t = ctx.currentTime + i * 0.5;
+        osc.frequency.setValueAtTime(600, t);
+        osc.frequency.linearRampToValueAtTime(1200, t + 0.25);
+        osc.frequency.linearRampToValueAtTime(600, t + 0.5);
+        gain.gain.setValueAtTime(0.2, t);
+        gain.gain.setValueAtTime(0.2, t + 0.4);
+        gain.gain.exponentialRampToValueAtTime(0.01, t + 0.5);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(t); osc.stop(t + 0.5);
+      }
+    }
+
+    // Alarme de colisão: estilo Apple Crash Detection (pulso grave + agudo intenso)
+    function playCrashAlarm() {
+      vibrateIntense();
+      const ctx = getCtx();
+      // Impacto grave
+      const bass = ctx.createOscillator(); const bassG = ctx.createGain();
+      bass.type = 'sawtooth'; bass.frequency.value = 80;
+      bassG.gain.setValueAtTime(0.4, ctx.currentTime);
+      bassG.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+      bass.connect(bassG); bassG.connect(ctx.destination);
+      bass.start(); bass.stop(ctx.currentTime + 0.3);
+      // Alarme agudo pulsante
+      for (let i = 0; i < 3; i++) {
+        const osc = ctx.createOscillator(); const gain = ctx.createGain();
+        osc.type = 'square';
+        const t = ctx.currentTime + 0.3 + i * 0.2;
+        osc.frequency.setValueAtTime(880 + i*220, t);
+        gain.gain.setValueAtTime(0.25, t);
+        gain.gain.exponentialRampToValueAtTime(0.01, t + 0.15);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(t); osc.stop(t + 0.15);
+      }
+    }
+
+    // Beep de contagem regressiva (urgência crescente conforme tempo diminui)
+    function playCountdownBeep(secondsLeft) {
+      const ctx = getCtx();
+      const osc = ctx.createOscillator(); const gain = ctx.createGain();
+      if (secondsLeft <= 3) {
+        // Últimos 3s: pulso duplo agudo e forte (URGENTE)
+        osc.type = 'square'; osc.frequency.value = 1400;
+        gain.gain.setValueAtTime(0.3, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.08);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(); osc.stop(ctx.currentTime + 0.08);
+        // Segundo pulso
+        const osc2 = ctx.createOscillator(); const gain2 = ctx.createGain();
+        osc2.type = 'square'; osc2.frequency.value = 1600;
+        gain2.gain.setValueAtTime(0.3, ctx.currentTime + 0.12);
+        gain2.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+        osc2.connect(gain2); gain2.connect(ctx.destination);
+        osc2.start(ctx.currentTime + 0.12); osc2.stop(ctx.currentTime + 0.2);
+      } else if (secondsLeft <= 7) {
+        // 4-7s: tom médio mais rápido
+        osc.type = 'triangle'; osc.frequency.value = 1000;
+        gain.gain.setValueAtTime(0.2, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(); osc.stop(ctx.currentTime + 0.1);
+      } else {
+        // 8-15s: tom suave baixo
+        osc.type = 'sine'; osc.frequency.value = 660;
+        gain.gain.setValueAtTime(0.12, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(); osc.stop(ctx.currentTime + 0.15);
+      }
+    }
+
+    const FC_ALTA_THRESHOLD = 120;
+    const FC_BAIXA_THRESHOLD = 50;
+    // Limiares clínicos — valores padrão (usuário pode customizar nas Configurações)
+    let FC_CRITICA_ALTA = 150;
+    let FC_CRITICA_BAIXA = 40;
+    let PA_EMERGENCIA_SIS = 180;
+    let PA_EMERGENCIA_DIA = 120;
+    let PA_HIPO_SIS = 80;
+    let PA_HIPO_DIA = 50;
+
+    // Inline SVG icons
+    const IconSignal = ({color='currentColor', size=16, strength=3}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round">
+        <rect x="2" y="18" width="3" height="4" fill={strength>=1?color:'#374151'}/>
+        <rect x="7" y="14" width="3" height="8" fill={strength>=2?color:'#374151'}/>
+        <rect x="12" y="9" width="3" height="13" fill={strength>=3?color:'#374151'}/>
+        <rect x="17" y="4" width="3" height="18" fill={strength>=4?color:'#374151'}/>
+      </svg>
+    );
+
+    const IconAlertTriangle = ({color='currentColor', size=24}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/>
+      </svg>
+    );
+    const IconHeart = ({color='currentColor', size=24}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>
+      </svg>
+    );
+    const IconActivity = ({color='currentColor', size=24}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+      </svg>
+    );
+
+    const COLOR_STYLES = {
+      red: { border: '1px solid rgba(239,68,68,0.7)', shadow: '0 0 20px rgba(239,68,68,0.4), 0 0 40px rgba(239,68,68,0.1)', text: '#ff5555', bg: 'rgba(239,68,68,0.15)' },
+      pink: { border: '1px solid rgba(236,72,153,0.7)', shadow: '0 0 20px rgba(236,72,153,0.4), 0 0 40px rgba(236,72,153,0.1)', text: '#ff6eb4', bg: 'rgba(236,72,153,0.15)' },
+      blue: { border: '1px solid rgba(59,130,246,0.7)', shadow: '0 0 20px rgba(59,130,246,0.4), 0 0 40px rgba(59,130,246,0.1)', text: '#5ba3ff', bg: 'rgba(59,130,246,0.15)' },
+    };
+
+    function ProtectionCard({ title, desc, color, active, onToggle, icon }) {
+      const s = COLOR_STYLES[color];
+      return (
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'10px 12px', marginBottom:'8px', borderRadius:'12px', backgroundColor:'#1a1a1a', border: s.border, boxShadow: active ? s.shadow : 'none', transition:'all 0.3s' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+            <div style={{ padding:'8px', borderRadius:'10px', backgroundColor: s.bg, display:'flex', alignItems:'center', justifyContent:'center' }}>{icon}</div>
+            <div>
+              <h3 style={{ fontWeight:700, fontSize:'13px', color: s.text, margin:0, letterSpacing:'-0.3px' }}>{title}</h3>
+              <p style={{ color:'#6b7280', fontSize:'10px', margin:'2px 0 0' }}>{desc}</p>
+            </div>
+          </div>
+          <button onClick={() => { onToggle(); active ? playToggleOff() : playToggleOn(); }} style={{ width:'40px', height:'20px', borderRadius:'10px', padding:'2px', border:'none', cursor:'pointer', backgroundColor: active ? s.text : '#374151', transition:'background-color 0.2s', display:'flex', alignItems:'center' }}>
+            <div style={{ width:'16px', height:'16px', borderRadius:'50%', backgroundColor:'white', transition:'transform 0.2s', transform: active ? 'translateX(20px)' : 'translateX(0)', boxShadow:'0 1px 3px rgba(0,0,0,0.3)' }} />
+          </button>
+        </div>
+      );
+    }
+
+
+    function App() {
+      const [monitoring, setMonitoring] = useState(false);
+      const [sensorStatus, setSensorStatus] = useState({ accel:'off', gps:'off', hr:'off', bp:'off', gyro:'off' });
+      const [calibrating, setCalibrating] = useState(false);
+      const [sensorLog, setSensorLog] = useState([]);
+      const sensorsRef = useRef({});
+      const protectionsRef = useRef([]);
+      const [bluetoothOn, setBluetoothOn] = useState(false);
+      const [gpsActive, setGpsActive] = useState(false);
+      const [heartRate, setHeartRate] = useState(72);
+      const [speed, setSpeed] = useState(0);
+      const [sosAlert, setSosAlert] = useState(false);
+      const [sosCountdown, setSosCountdown] = useState(15);
+      const [crashAlert, setCrashAlert] = useState(false);
+      const [crashCountdown, setCrashCountdown] = useState(15);
+      const [alertPriority, setAlertPriority] = useState('normal'); // normal → critico
+      const [fcAlert, setFcAlert] = useState(false);
+      const [fcAlertType, setFcAlertType] = useState('');
+      const [fcCountdown, setFcCountdown] = useState(15);
+      const [paAlert, setPaAlert] = useState(false);
+      const [paAlertType, setPaAlertType] = useState('');
+      const [paCountdown, setPaCountdown] = useState(15);
+      const [pressaoSis, setPressaoSis] = useState(120);
+      const [pressaoDia, setPressaoDia] = useState(80);
+      // === CONFIGURAÇÕES (limites personalizáveis + toggles) ===
+      const [alertConfig, setAlertConfig] = useState(() => {
+        try {
+          const s = localStorage.getItem('gv_alert_config');
+          return s ? JSON.parse(s) : {
+            fcAtiva: true, fcMax: 150, fcMin: 40,
+            paAtiva: true, paMaxSis: 180, paMaxDia: 120, paMinSis: 80, paMinDia: 50,
+            velAtiva: false, velMax: 120,
+            vibrar: true
+          };
+        } catch(e) { return { fcAtiva:true, fcMax:150, fcMin:40, paAtiva:true, paMaxSis:180, paMaxDia:120, paMinSis:80, paMinDia:50, velAtiva:false, velMax:120, vibrar:true }; }
+      });
+      useEffect(() => { localStorage.setItem('gv_alert_config', JSON.stringify(alertConfig)); }, [alertConfig]);
+      const alertConfigRef = useRef(alertConfig);
+      useEffect(() => { alertConfigRef.current = alertConfig; 
+        // Sincronizar limites globais com config do usuário
+        FC_CRITICA_ALTA = alertConfig.fcMax;
+        FC_CRITICA_BAIXA = alertConfig.fcMin;
+        PA_EMERGENCIA_SIS = alertConfig.paMaxSis;
+        PA_EMERGENCIA_DIA = alertConfig.paMaxDia;
+        PA_HIPO_SIS = alertConfig.paMinSis;
+        PA_HIPO_DIA = alertConfig.paMinDia;
+      }, [alertConfig]);
+      const [configPinVerified, setConfigPinVerified] = useState(false);
+      const [configPinInput, setConfigPinInput] = useState('');
+      const [configPinError, setConfigPinError] = useState('');
+
+      // Vibração intensa (2 segundos) em qualquer alerta
+      const vibrateAlert = () => {
+        if (!alertConfig.vibrar) return;
+        if (navigator.vibrate) {
+          navigator.vibrate([300, 100, 300, 100, 300, 100, 300, 100, 300]); // 2s pattern intenso
+        }
+      };
+
+      const [activeTab, setActiveTab] = useState('monitor');
+      const [userLat, setUserLat] = useState(-22.265);
+      const [userLng, setUserLng] = useState(-48.182);
+      const [gpsError, setGpsError] = useState('');
+
+      // Direção do movimento (heading) para o triângulo de navegação
+      const [heading, setHeading] = useState(0);
+
+      // GPS AUTOMÁTICO: ativa assim que o app abre, independente do monitoramento
+      const [mapUrl, setMapUrl] = useState('https://maps.google.com/maps?ll=-22.265,-48.182&z=16&t=m&output=embed');
+      const mapKeyRef = useRef(0);
+      useEffect(() => {
+        if (sensorStatus.gps === 'ok') { setGpsActive(true); return; } // GPSSensor já fornece dados
+        if (!navigator.geolocation) { setGpsError('GPS não suportado'); return; }
+        let lastUpdateLat = -22.265;
+        let lastUpdateLng = -48.182;
+        let prevLat = null, prevLng = null;
+        let prevTime = null;
+        const watchId = navigator.geolocation.watchPosition(
+          (pos) => {
+            const lat = pos.coords.latitude;
+            const lng = pos.coords.longitude;
+            const now = pos.timestamp || Date.now();
+            setUserLat(lat);
+            setUserLng(lng);
+            setGpsActive(true);
+            setGpsError('');
+
+            // === VELOCIDADE ===
+            if (pos.coords.speed != null && pos.coords.speed >= 0 && !isNaN(pos.coords.speed)) {
+              // speed vem em m/s, converter pra km/h
+              setSpeed(Math.round(pos.coords.speed * 3.6));
+            } else if (prevLat !== null && prevTime !== null) {
+              // Calcular velocidade manualmente pela distância/tempo
+              const dt = (now - prevTime) / 1000; // segundos
+              if (dt > 0.5) {
+                const R = 6371000; // raio da terra em metros
+                const dLat = (lat - prevLat) * Math.PI / 180;
+                const dLon = (lng - prevLng) * Math.PI / 180;
+                const a = Math.sin(dLat/2)**2 + Math.cos(prevLat*Math.PI/180)*Math.cos(lat*Math.PI/180)*Math.sin(dLon/2)**2;
+                const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+                const speedMs = dist / dt;
+                if (speedMs < 80) { // filtro anti-spike (< 288 km/h)
+                  setSpeed(Math.round(speedMs * 3.6));
+                }
+              }
+            }
+
+            // === HEADING (direção) ===
+            if (pos.coords.heading !== null && pos.coords.heading > 0) {
+              setHeading(pos.coords.heading);
+            } else if (prevLat !== null) {
+              const dLng = lng - prevLng;
+              const dLat = lat - prevLat;
+              if (Math.abs(dLat) > 0.00001 || Math.abs(dLng) > 0.00001) {
+                const angle = Math.atan2(dLng, dLat) * (180 / Math.PI);
+                setHeading((angle + 360) % 360);
+              }
+            }
+
+            prevLat = lat; prevLng = lng; prevTime = now;
+
+            // Atualiza mapa se moveu mais de ~30 metros (era 100m, muito alto)
+            if (Math.abs(lat - lastUpdateLat) > 0.0003 || Math.abs(lng - lastUpdateLng) > 0.0003) {
+              lastUpdateLat = lat;
+              lastUpdateLng = lng;
+              mapKeyRef.current++;
+              setMapUrl('https://maps.google.com/maps?ll='+lat+','+lng+'&z=17&t=m&output=embed&r='+mapKeyRef.current);
+            }
+          },
+          (err) => { setGpsError('Sem permissão GPS'); },
+          { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+        );
+        return () => navigator.geolocation.clearWatch(watchId);
+      }, [sensorStatus.gps]);
+      const [protections, setProtections] = useState([
+        { id:'parada', title:'Parada Brusca', desc:'Detecta colisões e freadas', color:'red', active:true },
+        { id:'fc-alta', title:'FC Alta', desc:'Alerta acima de '+FC_ALTA_THRESHOLD+' bpm', color:'pink', active:true },
+        { id:'fc-baixa', title:'FC Baixa', desc:'Alerta abaixo de '+FC_BAIXA_THRESHOLD+' bpm', color:'blue', active:true },
+        { id:'pa-alta', title:'Pressão Alta', desc:'Alerta acima de 140/90 mmHg', color:'red', active:true },
+        { id:'pa-baixa', title:'Pressão Baixa', desc:'Alerta abaixo de 90/60 mmHg', color:'blue', active:true },
+      ]);
+      useEffect(() => { protectionsRef.current = protections; }, [protections]);
+      const [contatos, setContatos] = useState(() => {
+        try { const s = localStorage.getItem('gv_contatos'); return s ? JSON.parse(s) : [{ nome:'', tel:'', relacao:'', apikey:'' }]; } catch(e) { return [{ nome:'', tel:'', relacao:'', apikey:'' }]; }
+      });
+      const [ficha, setFicha] = useState(() => {
+        try { const s = localStorage.getItem('gv_ficha'); return s ? JSON.parse(s) : { sangue:'', alergias:'', condicoes:'', medicamentos:'', plano:'' }; } catch(e) { return { sangue:'', alergias:'', condicoes:'', medicamentos:'', plano:'' }; }
+      });
+      const [historicoFC, setHistoricoFC] = useState(() => {
+        try { const s = localStorage.getItem('gv_hist_fc'); return s ? JSON.parse(s) : []; } catch(e) { return []; }
+      });
+      const [historicoPressao, setHistoricoPressao] = useState(() => {
+        try { const s = localStorage.getItem('gv_hist_pa'); return s ? JSON.parse(s) : []; } catch(e) { return []; }
+      });
+      const [historicoColisao, setHistoricoColisao] = useState(() => {
+        try { const s = localStorage.getItem('gv_hist_col'); return s ? JSON.parse(s) : []; } catch(e) { return []; }
+      });
+
+      // Persistir dados no localStorage
+      useEffect(() => { try { localStorage.setItem('gv_contatos', JSON.stringify(contatos)); } catch(e){} }, [contatos]);
+      useEffect(() => { try { localStorage.setItem('gv_ficha', JSON.stringify(ficha)); } catch(e){} }, [ficha]);
+      useEffect(() => { try { localStorage.setItem('gv_hist_fc', JSON.stringify(historicoFC)); } catch(e){} }, [historicoFC]);
+      useEffect(() => { try { localStorage.setItem('gv_hist_pa', JSON.stringify(historicoPressao)); } catch(e){} }, [historicoPressao]);
+      useEffect(() => { try { localStorage.setItem('gv_hist_col', JSON.stringify(historicoColisao)); } catch(e){} }, [historicoColisao]);
+      const [histTab, setHistTab] = useState('fc');
+
+      // Atualizar notificação persistente com dados ao vivo
+      useEffect(() => {
+        if (!monitoring) return;
+        const i = setInterval(() => {
+          updateNotification(speed, heartRate, pressaoSis, pressaoDia);
+        }, 10000); // A cada 10s
+        return () => clearInterval(i);
+      }, [monitoring, speed, heartRate, pressaoSis, pressaoDia]);
+
+      // Ouvir evento de stop do Service Worker
+      useEffect(() => {
+        const handler = () => { setMonitoring(false); stopForegroundService(); playToggleOff(); };
+        document.addEventListener('gv-stop', handler);
+        return () => document.removeEventListener('gv-stop', handler);
+      }, []);
+
+      // Alimentar acelerômetro com velocidade GPS para correlação de colisão
+      useEffect(() => {
+        if (sensorsRef.current.accel && sensorsRef.current.accel.setCurrentSpeed) {
+          sensorsRef.current.accel.setCurrentSpeed(speed);
+        }
+      }, [speed]);
+
+      // FC: usa sensor BLE real. Se não conectado, mostra '--'
+      useEffect(() => {
+        if (!monitoring) { setHeartRate(null); return; }
+        if (sensorStatus.hr === 'ok') return; // Sensor real ativo
+        // Sem sensor real → mostra '--' (não simula)
+        setHeartRate(null);
+      }, [sensorStatus.hr, monitoring]);
+
+      // Pressão: usa sensor BLE real. Se não conectado, mostra '--'
+      useEffect(() => {
+        if (!monitoring) { setPressaoSis(null); setPressaoDia(null); return; }
+        if (sensorStatus.bp === 'ok') return; // Sensor real ativo
+        // Sem sensor real → mostra '--' (não simula)
+        setPressaoSis(null);
+        setPressaoDia(null);
+      }, [monitoring, sensorStatus.bp]);
+
+      // Detecta FC crítica → dispara alerta 15s
+      useEffect(() => {
+        if (!monitoring || fcAlert) return;
+        const fcAlta = protections.find(p => p.id==='fc-alta');
+        const fcBaixa = protections.find(p => p.id==='fc-baixa');
+        if (fcAlta?.active && heartRate >= FC_CRITICA_ALTA) {
+          setFcAlertType('TAQUICARDIA GRAVE');
+          setFcAlert(true); setFcCountdown(15); playAlert();
+        } else if (fcBaixa?.active && heartRate <= FC_CRITICA_BAIXA) {
+          setFcAlertType('BRADICARDIA GRAVE');
+          setFcAlert(true); setFcCountdown(15); playAlert();
+        }
+      }, [heartRate, monitoring]);
+
+      // Detecta pressão crítica → dispara alerta 15s
+      useEffect(() => {
+        if (!monitoring || paAlert) return;
+        const paAlta = protections.find(p => p.id==='pa-alta');
+        const paBaixa = protections.find(p => p.id==='pa-baixa');
+        if (paAlta?.active && (pressaoSis >= PA_EMERGENCIA_SIS || pressaoDia >= PA_EMERGENCIA_DIA)) {
+          setPaAlertType('EMERGÊNCIA HIPERTENSIVA');
+          setPaAlert(true); setPaCountdown(15); playAlert();
+        } else if (paBaixa?.active && (pressaoSis <= PA_HIPO_SIS || pressaoDia <= PA_HIPO_DIA)) {
+          setPaAlertType('HIPOTENSÃO GRAVE');
+          setPaAlert(true); setPaCountdown(15); playAlert();
+        }
+      }, [pressaoSis, pressaoDia, monitoring]);
+
+      // Helper: data/hora atual formatada
+      const agora = () => { const d=new Date(); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
+
+      // Contagem regressiva FC
+      useEffect(() => {
+        if (!fcAlert) return;
+        if (fcCountdown <= 0) {
+          setFcAlert(false); setFcCountdown(15); playSOS();
+          setHistoricoFC(h => [{ valor: heartRate+' bpm', tipo: fcAlertType, data: agora(), cor: heartRate>=FC_CRITICA_ALTA?'#ff5555':'#5ba3ff' }, ...h].slice(0,20));
+          sendEmergencyAlert(fcAlertType, 'Frequência cardíaca: '+heartRate+' bpm');
+          sendEmergencyNotification(fcAlertType, 'FC: '+heartRate+' bpm — Alerta enviado aos contatos!');
+          return;
+        }
+        playCountdownBeep(fcCountdown);
+        const t = setTimeout(() => setFcCountdown(c => c - 1), 1000);
+        return () => clearTimeout(t);
+      }, [fcAlert, fcCountdown]);
+
+      // Contagem regressiva Pressão
+      useEffect(() => {
+        if (!paAlert) return;
+        if (paCountdown <= 0) {
+          setPaAlert(false); setPaCountdown(15); playSOS();
+          setHistoricoPressao(h => [{ valor: pressaoSis+'/'+pressaoDia+' mmHg', tipo: paAlertType, data: agora(), cor: paAlertType.includes('HIPER')?'#ff5555':'#5ba3ff' }, ...h].slice(0,20));
+          sendEmergencyAlert(paAlertType, 'Pressão arterial: '+pressaoSis+'/'+pressaoDia+' mmHg');
+          sendEmergencyNotification(paAlertType, 'PA: '+pressaoSis+'/'+pressaoDia+' mmHg — Alerta enviado!');
+          return;
+        }
+        playCountdownBeep(paCountdown);
+        const t = setTimeout(() => setPaCountdown(c => c - 1), 1000);
+        return () => clearTimeout(t);
+      }, [paAlert, paCountdown]);
+
+      // Contagem regressiva SOS manual
+      useEffect(() => {
+        if (!sosAlert) return;
+        if (sosCountdown <= 0) {
+          setSosAlert(false); setSosCountdown(15); playSOS();
+          sendEmergencyAlert('SOS MANUAL', 'Pessoa acionou alerta manual de emergência');
+          sendEmergencyNotification('SOS MANUAL', 'Alerta manual acionado — enviando aos contatos!');
+          return;
+        }
+        playCountdownBeep(sosCountdown);
+        const t = setTimeout(() => setSosCountdown(c => c - 1), 1000);
+        return () => clearTimeout(t);
+      }, [sosAlert, sosCountdown]);
+
+      // === CALIBRAÇÃO E ATIVAÇÃO DOS SENSORES ===
+      const calibrateAllSensors = async () => {
+        setCalibrating(true);
+        setSensorLog([]);
+        const log = (msg) => setSensorLog(l => [...l, msg]);
+
+        // 1. Acelerômetro
+        log('📐 Calibrando acelerômetro...');
+        const accel = new AccelerometerSensor((gForce) => {
+          const paradaSwitch = protectionsRef.current.find(p => p.id==='parada');
+          if (monitoring && paradaSwitch?.active) { setCrashAlert(true); setCrashCountdown(15); playCrashAlarm(); }
+        }, 25);
+        try {
+          const accelCal = await accel.calibrate(20);
+          setSensorStatus(s => ({...s, accel:'ok'}));
+          log('✅ Acelerômetro: calibrado (base: x='+accelCal.x.toFixed(1)+' y='+accelCal.y.toFixed(1)+' z='+accelCal.z.toFixed(1)+')');
+        } catch(e) { setSensorStatus(s => ({...s, accel:'erro'})); log('❌ Acelerômetro: não disponível'); }
+
+        // 2. GPS
+        log('🛰️ Calibrando GPS...');
+        const gps = new GPSSensor((data) => {
+          setUserLat(data.lat); setUserLng(data.lng);
+          if (data.speed > 0) setSpeed(Math.round(data.speed));
+          if (Math.abs(data.lat - userLat) > 0.001 || Math.abs(data.lng - userLng) > 0.001) {
+            setMapUrl('https://maps.google.com/maps?ll='+data.lat+','+data.lng+'&z=16&t=m&output=embed');
+          }
+        });
+        const gpsCal = await gps.calibrate();
+        if (gpsCal.error) { setSensorStatus(s => ({...s, gps:'erro'})); log('❌ GPS: '+gpsCal.error); }
+        else { setSensorStatus(s => ({...s, gps:'ok'})); log('✅ GPS: precisão '+gpsCal.accuracy?.toFixed(0)+'m'); setGpsActive(true); }
+
+        // 3. Giroscópio
+        log('🔄 Calibrando giroscópio...');
+        const gyro = new GyroscopeSensor((rate) => {
+          const paradaSwitch = protectionsRef.current.find(p => p.id==='parada');
+          if (monitoring && paradaSwitch?.active) { setCrashAlert(true); setCrashCountdown(15); playCrashAlarm(); }
+        });
+        try {
+          const gyroCal = await gyro.calibrate(10);
+          setSensorStatus(s => ({...s, gyro:'ok'}));
+          log('✅ Giroscópio: calibrado (orientação base registrada)');
+        } catch(e) { setSensorStatus(s => ({...s, gyro:'erro'})); log('❌ Giroscópio: não disponível'); }
+
+        sensorsRef.current = { accel, gps, gyro };
+        setCalibrating(false);
+        log('🎯 Calibração completa! Sensores prontos.');
+      };
+
+      // Conectar Bluetooth (FC + Pressão)
+      const connectBluetooth = async () => {
+        setSensorLog(l => [...l, '🔗 Conectando Bluetooth...']);
+        
+        // FC
+        const hr = new HeartRateSensor((bpm) => setHeartRate(bpm));
+        const hrCal = await hr.calibrate(30);
+        const hrResult = await hr.connect();
+        if (hrResult.connected) {
+          setSensorStatus(s => ({...s, hr:'ok'}));
+          setSensorLog(l => [...l, '✅ FC: conectado ('+hrResult.device+') | Max: '+hrCal.max+' bpm']);
+        } else {
+          setSensorStatus(s => ({...s, hr:'sim'}));
+          setSensorLog(l => [...l, '⚠️ FC: modo simulado ('+hrResult.error+')']);
+        }
+
+        // Pressão
+        const bp = new BloodPressureSensor((data) => { setPressaoSis(data.sis); setPressaoDia(data.dia); });
+        await bp.calibrate(120, 80);
+        const bpResult = await bp.connect();
+        if (bpResult.connected) {
+          setSensorStatus(s => ({...s, bp:'ok'}));
+          setSensorLog(l => [...l, '✅ Pressão: conectado ('+bpResult.device+')']);
+        } else {
+          setSensorStatus(s => ({...s, bp:'sim'}));
+          setSensorLog(l => [...l, '⚠️ Pressão: modo simulado ('+bpResult.error+')']);
+        }
+
+        sensorsRef.current.hr = hr;
+        sensorsRef.current.bp = bp;
+        setBluetoothOn(true);
+      };
+
+      // Ativar/desativar sensores com monitoramento
+      useEffect(() => {
+        if (monitoring && sensorsRef.current.accel) {
+          sensorsRef.current.accel.start();
+          sensorsRef.current.gps?.start();
+          sensorsRef.current.gyro?.start();
+        } else {
+          sensorsRef.current.accel?.stop();
+          sensorsRef.current.gyro?.stop();
+          sensorsRef.current.gps?.stop();
+        }
+      }, [monitoring]);
+
+      // Velocidade: usa GPS real. Se GPS não disponível, mostra '--'
+      useEffect(() => {
+        if (!monitoring) { setSpeed(0); return; }
+        if (sensorStatus.gps === 'ok') return; // GPS real fornece velocidade via callback
+        // Sem GPS real → mostra '--' (não simula)
+        setSpeed(null);
+      }, [monitoring, sensorStatus.gps]);
+
+      // === ELEVAÇÃO DE PRIORIDADE: Colisão + FC crítica/parada = ALERTA CRÍTICO ===
+      useEffect(() => {
+        if (!crashAlert) { if (alertPriority !== 'normal') setAlertPriority('normal'); return; }
+        if (heartRate <= 30) {
+          // FC praticamente parou → DISPARO IMEDIATO (reduz pra 3s)
+          setAlertPriority('critico');
+          if (crashCountdown > 3) setCrashCountdown(3);
+        } else if (heartRate <= FC_CRITICA_BAIXA) {
+          // FC muito baixa (≤40) → prioridade crítica, timer reduzido pra 8s
+          setAlertPriority('critico');
+          if (crashCountdown > 8) setCrashCountdown(8);
+        }
+      }, [heartRate, crashAlert]);
+
+      // Contagem regressiva da colisão
+      useEffect(() => {
+        if (!crashAlert) return;
+        if (crashCountdown <= 0) {
+          setCrashAlert(false);
+          setCrashCountdown(15);
+          playSOS();
+          const isCritico = alertPriority === 'critico';
+          const tipo = isCritico ? '🔴 COLISÃO CRÍTICA — FC PAROU' : 'Colisão Detectada';
+          const msg = isCritico
+            ? '⚠️ PRIORIDADE MÁXIMA: Impacto a '+speed+' km/h — Batimentos cardíacos CRÍTICOS ('+heartRate+' bpm) — POSSÍVEL INCONSCIÊNCIA'
+            : 'Impacto a '+speed+' km/h — pessoa não respondeu em 15s';
+          setHistoricoColisao(h => [{ valor: speed+' km/h — '+(isCritico?'FC CRÍTICA':'Impacto'), tipo: tipo, data: agora(), cor:'#ff5555', respondeu:false }, ...h].slice(0,20));
+          sendEmergencyAlert(isCritico ? '🚨 COLISÃO CRÍTICA — FC PAROU' : 'COLISÃO DETECTADA', msg);
+          sendEmergencyNotification(isCritico ? 'CRÍTICO — COLISÃO + FC' : 'COLISÃO', msg);
+          setAlertPriority('normal');
+          return;
+        }
+        playCountdownBeep(crashCountdown);
+        const t = setTimeout(() => setCrashCountdown(c => c - 1), 1000);
+        return () => clearTimeout(t);
+      }, [crashAlert, crashCountdown]);
+
+      // Rate-limit: máximo 1 alerta por tipo a cada 60s (anti-spam)
+      const lastAlertTime = useRef({});
+      
+      // === TELEGRAM BOT: Envio automático de alertas ===
+      const [telegramConfig, setTelegramConfig] = useState(() => {
+        try { const s = localStorage.getItem('gv_telegram'); return s ? JSON.parse(s) : { botToken:'', chatId:'', ativo:false }; } catch(e) { return { botToken:'', chatId:'', ativo:false }; }
+      });
+      useEffect(() => { try { localStorage.setItem('gv_telegram', JSON.stringify(telegramConfig)); } catch(e){} }, [telegramConfig]);
+
+      const sendTelegram = async (msg) => {
+        if (!telegramConfig.ativo || !telegramConfig.botToken || !telegramConfig.chatId) {
+          console.warn('[GuardiaVia Telegram] Não configurado');
+          return false;
+        }
+        // === SISTEMA OFFLINE: fila de alertas ===
+        if (!navigator.onLine) {
+          const queue = JSON.parse(localStorage.getItem('gv_alert_queue') || '[]');
+          queue.push({ msg, timestamp: Date.now(), lat: userLat, lng: userLng });
+          localStorage.setItem('gv_alert_queue', JSON.stringify(queue));
+          console.log('[GuardiaVia] 🔄 Offline — alerta salvo na fila (' + queue.length + ' pendentes)');
+          return false;
+        }
+        try {
+          const token = telegramConfig.botToken.trim();
+          const chatId = telegramConfig.chatId.trim();
+          const url = `https://api.telegram.org/bot${token}/sendMessage`;
+          console.log('[GuardiaVia Telegram] Enviando para chat:', chatId);
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'Markdown' })
+          });
+          const data = await res.json();
+          if (data.ok) {
+            console.log('[GuardiaVia Telegram] ✅ Enviado! Message ID:', data.result?.message_id);
+            return true;
+          } else {
+            const errCode = data.error_code;
+            const errDesc = data.description || 'Erro desconhecido';
+            if (errCode === 401) {
+              console.error('[GuardiaVia Telegram] ❌ TOKEN INVÁLIDO!');
+              alert('❌ Telegram: Token inválido!\n\nVerifique no @BotFather.');
+            } else if (errCode === 400 && errDesc.includes('chat not found')) {
+              console.error('[GuardiaVia Telegram] ❌ CHAT ID INVÁLIDO!');
+              alert('❌ Telegram: Chat ID não encontrado!\n\n1. Abra o bot no Telegram\n2. Envie /start\n3. Verifique o Chat ID');
+            } else if (errCode === 403) {
+              console.error('[GuardiaVia Telegram] ❌ BOT BLOQUEADO!');
+              alert('❌ Telegram: Bot sem permissão!\n\nAbra o bot e envie /start');
+            } else {
+              console.error('[GuardiaVia Telegram] ❌ Erro ' + errCode + ':', errDesc);
+            }
+            return false;
+          }
+        } catch(e) {
+          console.error('[GuardiaVia Telegram] ❌ Falha de rede:', e.message);
+          // Salvar na fila se falhar por rede
+          const queue = JSON.parse(localStorage.getItem('gv_alert_queue') || '[]');
+          queue.push({ msg, timestamp: Date.now(), lat: userLat, lng: userLng });
+          localStorage.setItem('gv_alert_queue', JSON.stringify(queue));
+          return false;
+        }
+      };
+
+      // === ALERTA DE VELOCIDADE (GPS em tempo real) ===
+      useEffect(() => {
+        if (!monitoring || speed === null || !alertConfig.velAtiva) return;
+        if (speed > alertConfig.velMax) {
+          const velProtection = protections.find(p => p.id === 'parada');
+          if (velProtection?.active) {
+            sendEmergencyAlert('🚗 VELOCIDADE EXCESSIVA', speed + ' km/h (limite: ' + alertConfig.velMax + ' km/h)');
+          }
+        }
+      }, [speed, monitoring, alertConfig.velAtiva, alertConfig.velMax]);
+
+      // Monitoramento cíclico a cada 3 minutos (leitura BLE forçada + log + Telegram)
+      useEffect(() => {
+        if (!monitoring) return;
+        
+        // Leitura imediata no início
+        const doReading = () => {
+          // Re-acquire Wake Lock (redundância anti-suspensão Android)
+          requestWakeLock();
+          
+          // Forçar re-leitura BLE dos sensores (se conectados)
+          const sensors = sensorsRef.current;
+          if (sensors.hr && sensors.hr.characteristic) {
+            try { sensors.hr.characteristic.readValue().then(val => {
+              const flags = val.getUint8(0);
+              const bpm = (val.byteLength >= 2) ? (flags & 0x01 ? val.getUint16(1, true) : val.getUint8(1)) : val.getUint8(0);
+              if (bpm != null && !isNaN(bpm) && bpm >= 10 && bpm <= 250) setHeartRate(bpm);
+            }).catch(e => console.warn('[Ciclo 3min] BLE HR read:', e.message)); } catch(e) {}
+          }
+          if (sensors.bp && sensors.bp.characteristic) {
+            try { sensors.bp.characteristic.readValue().then(val => {
+              if (val.byteLength >= 4) {
+                const sis = val.getUint16(1, true);
+                const dia = val.getUint16(3, true);
+                if (sis != null && !isNaN(sis) && sis > 40 && sis < 300) { setPressaoSis(sis); setPressaoDia(dia); }
+              }
+            }).catch(e => console.warn('[Ciclo 3min] BLE BP read:', e.message)); } catch(e) {}
+          }
+          
+          // Salvar registro periódico
+          const registro = { data: new Date().toLocaleString('pt-BR'), fc: heartRate, pa: pressaoSis && pressaoDia ? pressaoSis+'/'+pressaoDia : '--', speed: speed || 0 };
+          const hist = JSON.parse(localStorage.getItem('gv_ciclo_saude') || '[]');
+          hist.push(registro);
+          if (hist.length > 100) hist.shift();
+          localStorage.setItem('gv_ciclo_saude', JSON.stringify(hist));
+          console.log('[GuardiaVia] Ciclo 3min — registro salvo:', registro);
+          
+          // Enviar status pro Telegram (se ativo)
+          if (telegramConfig.ativo) {
+            sendTelegram('📊 *Status GuardiaVia*\n🕐 ' + registro.data + '\n💓 FC: ' + (heartRate != null && !isNaN(heartRate) ? heartRate : '--') + ' bpm\n🩺 PA: ' + registro.pa + ' mmHg\n🚗 Vel: ' + (speed != null && !isNaN(speed) ? speed : '--') + ' km/h\n📍 GPS: ' + userLat.toFixed(4) + ', ' + userLng.toFixed(4));
+          }
+          
+          // Atualizar notificação do foreground service
+          updateNotification(speed, heartRate, pressaoSis, pressaoDia);
+        };
+        
+        const ciclo = setInterval(doReading, 180000); // 3 minutos
+        return () => clearInterval(ciclo);
+      }, [monitoring, heartRate, pressaoSis, pressaoDia, speed, telegramConfig]);
+
+      // Envia alerta via Telegram com localização
+      const sendEmergencyAlert = (tipo, detalhe) => {
+        // Rate-limit check
+        const now = Date.now();
+        const lastTime = lastAlertTime.current[tipo] || 0;
+        if (now - lastTime < 60000) {
+          console.log('[GuardiaVia] Rate-limit: alerta "'+tipo+'" bloqueado (aguarde 60s)');
+          return;
+        }
+        lastAlertTime.current[tipo] = now;
+        
+        // VIBRAÇÃO INTENSA (2 segundos) — celular + watch pareado
+        vibrateAlert();
+        
+        const msg = '🚨 *EMERGÊNCIA GUARDIAVIA*\n\n' +
+          '⚠️ Tipo: ' + tipo + '\n' +
+          '📊 Detalhe: ' + detalhe + '\n' +
+          '📍 Localização: https://www.google.com/maps?q=' + userLat + ',' + userLng + '\n\n' +
+          'A pessoa NÃO respondeu ao alerta em tempo. Por favor verifique imediatamente!';
+        
+        // === ENVIO TELEGRAM (automático, instantâneo) ===
+        sendTelegram(msg);
+        
+        if (!telegramConfig.ativo) {
+          alert('🚨 ALERTA! ' + tipo + '\n' + detalhe + '\n\n⚠️ Configure o Telegram para envio automático de alertas!');
+        }
+      };
+
+      // Simula detecção de colisão (quando velocidade > 70 e monitoramento ativo)
+      const simulateCrash = () => {
+        if (monitoring && speed > 70) {
+          setCrashAlert(true);
+          setCrashCountdown(15);
+        }
+      };
+
+      const toggle = (id) => setProtections(p => p.map(x => x.id===id ? {...x, active:!x.active} : x));
+
+      const getIcon = (id) => {
+        if (id==='parada') return <IconAlertTriangle color="#ff5555" size={18}/>;
+        if (id==='fc-alta') return <IconHeart color="#ff6eb4" size={18}/>;
+        if (id==='fc-baixa') return <IconActivity color="#5ba3ff" size={18}/>;
+        if (id==='pa-alta') return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ff5555" strokeWidth="2" strokeLinecap="round"><path d="M12 2v20M8 6l4-4 4 4M8 10h8M8 14h8"/></svg>;
+        if (id==='pa-baixa') return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5ba3ff" strokeWidth="2" strokeLinecap="round"><path d="M12 22V2M8 18l4 4 4-4M8 10h8M8 14h8"/></svg>;
+        return null;
+      };
+
+      return (
+        <div style={{ minHeight:'100vh', backgroundColor:'#0f0f0f', color:'white', padding:'16px 14px 80px', fontFamily:'system-ui, -apple-system, sans-serif', position:'relative', overflowX:'hidden', maxWidth:'500px', margin:'0 auto' }}>
+          <header style={{ marginBottom:'16px' }}>
+            <h1 style={{ fontSize:'24px', fontWeight:900, color:'#00ff6a', letterSpacing:'-1px', margin:0, textShadow:'0 0 10px rgba(0,255,106,0.3)' }}>GUARDIAVIA</h1>
+            <p style={{ fontSize:'9px', color:'rgba(0,255,106,0.7)', letterSpacing:'3px', margin:'2px 0 0' }}>PROTEÇÃO EM TEMPO REAL</p>
+          </header>
+
+          {/* === TAB: MONITOR === */}
+          {activeTab === 'monitor' && (<>
+            <div style={{ backgroundColor:'#1e1e1e', border:'1px solid #374151', padding:'10px 12px', borderRadius:'12px', display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'12px' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+                <button style={{ display:'flex', alignItems:'center', gap:'6px', background:'none', border:'none', cursor:'default', color: gpsActive ? '#22c55e' : '#9ca3af' }}>
+                  <IconSignal color={gpsActive ? '#22c55e' : '#9ca3af'} size={16} strength={gpsActive ? 4 : 1}/>
+                  <span style={{ fontSize:'12px', fontWeight:600 }}>{gpsActive ? 'GPS' : 'GPS...'}</span>
+                </button>
+                <button onClick={() => { if(!bluetoothOn) connectBluetooth(); else setBluetoothOn(false); playClick(); }} style={{ display:'flex', alignItems:'center', gap:'5px', background:'none', border:'none', cursor:'pointer', color: bluetoothOn ? '#3b82f6' : '#9ca3af', textShadow: bluetoothOn ? '0 0 8px rgba(59,130,246,0.6), 0 2px 4px rgba(0,0,0,0.5)' : '0 2px 4px rgba(0,0,0,0.5)' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={bluetoothOn ? '#3b82f6' : '#9ca3af'} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ filter: bluetoothOn ? 'drop-shadow(0 0 4px rgba(59,130,246,0.6)) drop-shadow(0 2px 2px rgba(0,0,0,0.4))' : 'drop-shadow(0 2px 2px rgba(0,0,0,0.4))' }}><polyline points="6.5 6.5 17.5 17.5 12 23 12 1 17.5 6.5 6.5 17.5"/></svg>
+                  <span style={{ fontSize:'11px', fontWeight:700, fontStyle:'italic', letterSpacing:'-0.5px', textShadow: bluetoothOn ? '0 0 8px rgba(59,130,246,0.5), 0 2px 3px rgba(0,0,0,0.6)' : '0 2px 3px rgba(0,0,0,0.6)' }}>{bluetoothOn ? 'BlueTouch' : 'BlueTouch'}</span>
+                </button>
+              </div>
+              <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+                {bluetoothOn && <span style={{ color:'#3b82f6', fontSize:'10px', fontWeight:600 }}>⌚ Watch conectado</span>}
+                <span style={{ color: speed > 70 ? '#ff5555' : '#00ff6a', fontSize:'11px', fontWeight:700 }}>{speed === null ? '-- km/h' : speed+' km/h'}</span>
+                <span style={{ color: heartRate > FC_ALTA_THRESHOLD ? '#ff5555' : heartRate < FC_BAIXA_THRESHOLD ? '#5ba3ff' : '#ff6eb4', fontSize:'11px', fontWeight:700 }}>♥ {monitoring ? (heartRate === null ? '--' : heartRate) : ''}</span>
+                {monitoring && <span style={{ color: (pressaoSis >= 140 || pressaoSis === null) ? '#ff5555' : pressaoSis <= 90 ? '#5ba3ff' : '#9ca3af', fontSize:'10px', fontWeight:600 }}>{pressaoSis === null ? '--/--' : pressaoSis+'/'+pressaoDia}</span>}
+              </div>
+            </div>
+
+            <div style={{ borderRadius:'12px', overflow:'hidden', marginBottom:'12px', border:'1px solid #374151', position:'relative' }}>
+              <iframe src={mapUrl} width="100%" height="150" style={{ border:0, display:'block', transition:'opacity 0.3s' }} allowFullScreen="" loading="lazy"></iframe>
+              {/* Triângulo de navegação */}
+              {gpsActive && <div style={{ position:'absolute', top:'50%', left:'50%', transform:`translate(-50%,-50%) rotate(${heading}deg)`, transition:'transform 0.8s ease-out', zIndex:10, width:'28px', height:'28px', display:'flex', alignItems:'center', justifyContent:'center', filter:'drop-shadow(0 0 8px rgba(66,133,244,0.6))' }}><svg width="28" height="28" viewBox="0 0 28 28"><polygon points="14,2 24,24 14,19 4,24" fill="rgba(66,133,244,0.95)" stroke="white" strokeWidth="2"/></svg><div style={{ position:'absolute', inset:'-10px', borderRadius:'50%', backgroundColor:'rgba(66,133,244,0.12)', animation:'pulse 2s infinite' }}/></div>}
+              {gpsActive && <div style={{ position:'absolute', bottom:'6px', left:'6px', backgroundColor:'rgba(0,0,0,0.7)', borderRadius:'6px', padding:'3px 8px', fontSize:'9px', color:'#00ff6a' }}>📍 {userLat.toFixed(4)}, {userLng.toFixed(4)}</div>}
+              {gpsError && <div style={{ position:'absolute', bottom:'6px', left:'6px', backgroundColor:'rgba(0,0,0,0.7)', borderRadius:'6px', padding:'3px 8px', fontSize:'9px', color:'#ff5555' }}>{gpsError}</div>}
+            </div>
+
+            <section>
+              <h2 style={{ color:'rgba(0,255,106,0.8)', fontSize:'9px', fontWeight:700, marginBottom:'10px', letterSpacing:'2px', textTransform:'uppercase' }}>Proteções Ativas</h2>
+              {protections.map(p => <ProtectionCard key={p.id} title={p.title} desc={p.desc} color={p.color} active={p.active} onToggle={() => toggle(p.id)} icon={getIcon(p.id)} />)}
+            </section>
+
+            <button onClick={() => { setSosAlert(true); setSosCountdown(15); playSOS(); }} style={{ width:'100%', marginTop:'10px', padding:'12px', borderRadius:'12px', border:'2px solid #ff3333', backgroundColor:'rgba(255,50,50,0.12)', color:'#ff4444', fontWeight:900, fontSize:'14px', cursor:'pointer', boxShadow:'0 0 20px rgba(255,50,50,0.4), 0 0 40px rgba(255,50,50,0.15)', textShadow:'0 0 8px rgba(255,68,68,0.4)' }}>
+              SOS — ALERTA MANUAL
+            </button>
+
+            <button onClick={() => { if (!monitoring && !sensorsRef.current.accel) calibrateAllSensors(); if (!monitoring) startForegroundService(); else stopForegroundService(); setMonitoring(!monitoring); monitoring ? playToggleOff() : playToggleOn(); }} style={{ width:'100%', marginTop:'8px', padding:'12px', borderRadius:'12px', border: monitoring ? '2px solid #00ff6a' : '2px solid #ff3333', backgroundColor: monitoring ? 'rgba(0,255,106,0.1)' : 'rgba(255,50,50,0.1)', color: monitoring ? '#00ff6a' : '#ff4444', fontWeight:700, fontSize:'13px', cursor:'pointer', boxShadow: monitoring ? '0 0 18px rgba(0,255,106,0.4), 0 0 35px rgba(0,255,106,0.1)' : '0 0 18px rgba(255,50,50,0.4), 0 0 35px rgba(255,50,50,0.1)', display:'flex', alignItems:'center', justifyContent:'center', gap:'8px', transition:'all 0.3s', textShadow: monitoring ? '0 0 6px rgba(0,255,106,0.4)' : '0 0 6px rgba(255,68,68,0.4)' }}>
+              <span style={{ fontSize:'14px' }}>⏻</span> {monitoring ? 'Monitoramento Ativo' : 'Ativar Monitoramento'}
+            </button>
+
+            {/* Status dos sensores */}
+            {(calibrating || sensorLog.length > 0) && (
+              <div style={{ marginTop:'10px', backgroundColor:'#111', border:'1px solid #2a2a2a', borderRadius:'10px', padding:'10px 12px' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'6px' }}>
+                  <span style={{ color:'#00ff6a', fontSize:'9px', fontWeight:700, letterSpacing:'1px' }}>SENSORES</span>
+                  <div style={{ display:'flex', gap:'4px' }}>
+                    {Object.entries(sensorStatus).map(([k,v]) => (
+                      <span key={k} style={{ width:'8px', height:'8px', borderRadius:'50%', backgroundColor: v==='ok'?'#00ff6a':v==='sim'?'#ffaa00':v==='erro'?'#ff5555':'#374151' }} title={k+': '+v}/>
+                    ))}
+                  </div>
+                </div>
+                {sensorLog.slice(-4).map((msg, i) => (
+                  <p key={i} style={{ color:'#9ca3af', fontSize:'9px', margin:'2px 0', lineHeight:'1.3' }}>{msg}</p>
+                ))}
+                {calibrating && <p style={{ color:'#ffaa00', fontSize:'9px', margin:'4px 0 0', animation:'pulse 1s infinite' }}>⏳ Calibrando...</p>}
+              </div>
+            )}
+          </>)}
+
+          {/* === TAB: FICHA MÉDICA === */}
+          {activeTab === 'ficha' && (
+            <section>
+              <h2 style={{ color:'rgba(34,197,94,0.8)', fontSize:'10px', fontWeight:700, marginBottom:'16px', letterSpacing:'2px', textTransform:'uppercase' }}>Ficha Médica</h2>
+              {[
+                { key:'sangue', label:'Tipo Sanguíneo', placeholder:'Ex: O+, A-, B+...' },
+                { key:'alergias', label:'Alergias', placeholder:'Ex: Penicilina, Dipirona...' },
+                { key:'condicoes', label:'Condições Médicas', placeholder:'Ex: Diabetes, Asma...' },
+                { key:'medicamentos', label:'Medicamentos em Uso', placeholder:'Ex: Losartana 50mg...' },
+                { key:'plano', label:'Plano de Saúde', placeholder:'Ex: Unimed - 0012345678' },
+              ].map((item) => (
+                <div key={item.key} style={{ backgroundColor:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:'12px', padding:'14px 16px', marginBottom:'10px' }}>
+                  <label style={{ color:'#9ca3af', fontSize:'11px', display:'block', marginBottom:'6px' }}>{item.label}</label>
+                  <input
+                    type="text"
+                    placeholder={item.placeholder}
+                    value={ficha[item.key]}
+                    onChange={(e) => setFicha({...ficha, [item.key]: e.target.value})}
+                    style={{ width:'100%', background:'none', border:'none', outline:'none', color:'white', fontSize:'14px', fontWeight:600 }}
+                  />
+                </div>
+              ))}
+              <button onClick={() => { try { localStorage.setItem('gv_ficha', JSON.stringify(ficha)); playToggleOn(); } catch(e){} }} style={{ width:'100%', padding:'14px', borderRadius:'12px', border:'2px solid #00ff6a', backgroundColor:'rgba(0,255,106,0.1)', color:'#00ff6a', fontWeight:900, fontSize:'14px', cursor:'pointer', marginTop:'10px', boxShadow:'0 0 15px rgba(0,255,106,0.3)', textShadow:'0 0 6px rgba(0,255,106,0.4)' }}>💾 Salvar Ficha Médica</button>
+            </section>
+          )}
+
+          {/* === TAB: CONTATOS === */}
+          {activeTab === 'contatos' && (
+            <section>
+              {/* === TELEGRAM BOT CONFIG === */}
+              <div style={{ marginBottom:'20px', backgroundColor:'#111', border: telegramConfig.ativo ? '2px solid #2AABEE' : '1px solid #374151', borderRadius:'12px', padding:'14px', boxShadow: telegramConfig.ativo ? '0 0 20px rgba(42,171,238,0.2)' : 'none' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                    <span style={{ fontSize:'18px' }}>✈️</span>
+                    <span style={{ color:'#2AABEE', fontSize:'12px', fontWeight:900, letterSpacing:'0.5px' }}>TELEGRAM BOT</span>
+                  </div>
+                  <button onClick={() => setTelegramConfig({...telegramConfig, ativo: !telegramConfig.ativo})} style={{ padding:'4px 10px', borderRadius:'6px', border: telegramConfig.ativo ? '1px solid #2AABEE' : '1px solid #374151', background: telegramConfig.ativo ? 'rgba(42,171,238,0.15)' : 'transparent', color: telegramConfig.ativo ? '#2AABEE' : '#6b7280', fontSize:'10px', fontWeight:700, cursor:'pointer' }}>
+                    {telegramConfig.ativo ? '✅ ATIVO' : 'DESLIGADO'}
+                  </button>
+                </div>
+                <input type="text" placeholder="Bot Token (ex: 123456:ABC-DEF...)" value={telegramConfig.botToken} onChange={(e) => setTelegramConfig({...telegramConfig, botToken: e.target.value})} style={{ width:'100%', background:'#0f0f0f', border:'1px solid #374151', borderRadius:'8px', padding:'8px 10px', color:'#2AABEE', fontSize:'11px', outline:'none', marginBottom:'6px' }} />
+                <input type="text" placeholder="Chat ID (ex: 5067230242)" value={telegramConfig.chatId} onChange={(e) => setTelegramConfig({...telegramConfig, chatId: e.target.value})} style={{ width:'100%', background:'#0f0f0f', border:'1px solid #374151', borderRadius:'8px', padding:'8px 10px', color:'#2AABEE', fontSize:'11px', outline:'none', marginBottom:'8px' }} />
+                <div style={{ display:'flex', gap:'6px' }}>
+                  <button onClick={async () => {
+                    const ok = await sendTelegram('✅ *Teste GuardiaVia*\n\nConexão Telegram funcionando!\n🕐 ' + new Date().toLocaleString('pt-BR'));
+                    if (ok) alert('✅ Mensagem de teste enviada pro Telegram!');
+                    else alert('❌ Falha no envio. Verifique Token e Chat ID.');
+                  }} style={{ flex:1, padding:'8px', borderRadius:'8px', border:'1px solid rgba(42,171,238,0.4)', background:'rgba(42,171,238,0.08)', color:'#2AABEE', fontSize:'10px', fontWeight:700, cursor:'pointer' }}>
+                    📨 Testar Envio
+                  </button>
+                  <button onClick={async () => {
+                    const ok = await sendTelegram('🚨 *TESTE EMERGÊNCIA*\n\n⚠️ Tipo: FC ALTA\n📊 Detalhe: 165 bpm\n📍 Localização: https://www.google.com/maps?q='+userLat+','+userLng+'\n\n⏱️ Simulação de alerta');
+                    if (ok) alert('🚨 Alerta de teste enviado!');
+                    else alert('❌ Falha. Verifique configuração.');
+                  }} style={{ flex:1, padding:'8px', borderRadius:'8px', border:'1px solid rgba(255,85,85,0.4)', background:'rgba(255,85,85,0.08)', color:'#ff5555', fontSize:'10px', fontWeight:700, cursor:'pointer' }}>
+                    🚨 Testar Emergência
+                  </button>
+                </div>
+                <p style={{ color:'#4b5563', fontSize:'8px', marginTop:'6px', lineHeight:'1.3' }}>1. Crie um bot: @BotFather → /newbot → copie o Token<br/>2. Envie /start pro seu bot → pegue seu Chat ID em @userinfobot</p>
+              </div>
+
+              <h2 style={{ color:'rgba(34,197,94,0.8)', fontSize:'10px', fontWeight:700, marginBottom:'16px', letterSpacing:'2px', textTransform:'uppercase' }}>Contatos de Emergência</h2>
+              {contatos.map((c, i) => (
+                <div key={i} style={{ backgroundColor:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:'12px', padding:'16px', marginBottom:'10px' }}>
+                  <div style={{ display:'flex', gap:'8px', marginBottom:'8px' }}>
+                    <input type="text" placeholder="Nome" value={c.nome} onChange={(e) => { const nc=[...contatos]; nc[i].nome=e.target.value; setContatos(nc); }} style={{ flex:2, background:'#0f0f0f', border:'1px solid #374151', borderRadius:'8px', padding:'8px 10px', color:'white', fontSize:'13px', outline:'none' }} />
+                    <input type="text" placeholder="Relação" value={c.relacao} onChange={(e) => { const nc=[...contatos]; nc[i].relacao=e.target.value; setContatos(nc); }} style={{ flex:1, background:'#0f0f0f', border:'1px solid #374151', borderRadius:'8px', padding:'8px 10px', color:'white', fontSize:'13px', outline:'none' }} />
+                  </div>
+                  <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
+                    <input type="tel" placeholder="(00) 00000-0000" value={c.tel} onChange={(e) => { const nc=[...contatos]; nc[i].tel=e.target.value; setContatos(nc); }} style={{ flex:1, background:'#0f0f0f', border:'1px solid #374151', borderRadius:'8px', padding:'8px 10px', color:'white', fontSize:'13px', outline:'none' }} />
+                    <button onClick={() => setContatos(contatos.filter((_,idx)=>idx!==i))} style={{ background:'rgba(239,68,68,0.1)', border:'1px solid rgba(239,68,68,0.3)', borderRadius:'8px', padding:'8px 10px', color:'#ef4444', fontSize:'12px', cursor:'pointer', fontWeight:700 }}>✕</button>
+                  </div>
+
+                </div>
+              ))}
+              <button onClick={() => setContatos([...contatos, {nome:'', tel:'', relacao:'', apikey:''}])} style={{ width:'100%', padding:'14px', borderRadius:'12px', border:'1px dashed #374151', backgroundColor:'transparent', color:'#00ff6a', fontWeight:700, fontSize:'14px', cursor:'pointer', marginTop:'8px' }}>+ Adicionar Contato</button>
+              <button onClick={() => { try { localStorage.setItem('gv_contatos', JSON.stringify(contatos)); playToggleOn(); } catch(e){} }} style={{ width:'100%', padding:'14px', borderRadius:'12px', border:'2px solid #00ff6a', backgroundColor:'rgba(0,255,106,0.1)', color:'#00ff6a', fontWeight:900, fontSize:'14px', cursor:'pointer', marginTop:'10px', boxShadow:'0 0 15px rgba(0,255,106,0.3)', textShadow:'0 0 6px rgba(0,255,106,0.4)' }}>💾 Salvar Contatos</button>
+            </section>
+          )}
+
+          {/* === TAB: HISTÓRICO === */}
+          {activeTab === 'historico' && (
+            <section>
+              <h2 style={{ color:'rgba(0,255,106,0.8)', fontSize:'9px', fontWeight:700, marginBottom:'12px', letterSpacing:'2px', textTransform:'uppercase' }}>Histórico de Alertas</h2>
+              
+              {/* Sub-abas */}
+              <div style={{ display:'flex', gap:'6px', marginBottom:'14px' }}>
+                {[
+                  { id:'fc', label:'♥ Freq. Cardíaca', cor:'#ff6eb4' },
+                  { id:'pressao', label:'⬆ Pressão', cor:'#5ba3ff' },
+                  { id:'colisao', label:'💥 Colisão', cor:'#ff5555' },
+                ].map(t => (
+                  <button key={t.id} onClick={() => setHistTab(t.id)} style={{ flex:1, padding:'8px 4px', borderRadius:'8px', border: histTab===t.id ? '1px solid '+t.cor : '1px solid #333', backgroundColor: histTab===t.id ? t.cor+'15' : 'transparent', color: histTab===t.id ? t.cor : '#6b7280', fontSize:'9px', fontWeight:700, cursor:'pointer', transition:'all 0.2s' }}>{t.label}</button>
+                ))}
+              </div>
+
+              {/* Histórico FC */}
+              {histTab === 'fc' && (<>
+                <p style={{ color:'#6b7280', fontSize:'10px', marginBottom:'10px', lineHeight:'1.4' }}>⚠️ Alerta: FC ≥ {FC_CRITICA_ALTA} bpm (taquicardia grave) ou ≤ {FC_CRITICA_BAIXA} bpm (bradicardia grave) dispara emergência.</p>
+                {historicoFC.length === 0 && <p style={{ color:'#4b5563', fontSize:'11px', textAlign:'center', padding:'20px 0' }}>Nenhum alerta de FC registrado ainda.</p>}
+                {historicoFC.map((h, i) => (
+                  <div key={i} style={{ backgroundColor:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:'10px', padding:'12px 14px', marginBottom:'8px', borderLeft:'3px solid '+h.cor }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                      <span style={{ color: h.cor, fontSize:'12px', fontWeight:700 }}>{h.tipo}</span>
+                      <span style={{ color:'#4b5563', fontSize:'9px' }}>{h.data}</span>
+                    </div>
+                    <p style={{ color:'#9ca3af', fontSize:'11px', margin:'4px 0 0' }}>{h.valor}</p>
+                  </div>
+                ))}
+              </>)}
+
+              {/* Histórico Pressão */}
+              {histTab === 'pressao' && (<>
+                <p style={{ color:'#6b7280', fontSize:'10px', marginBottom:'10px', lineHeight:'1.4' }}>⚠️ Emergência: PA ≥ {PA_EMERGENCIA_SIS}/{PA_EMERGENCIA_DIA} mmHg (crise hipertensiva) ou ≤ {PA_HIPO_SIS}/{PA_HIPO_DIA} mmHg (hipotensão grave/choque).</p>
+                {historicoPressao.length === 0 && <p style={{ color:'#4b5563', fontSize:'11px', textAlign:'center', padding:'20px 0' }}>Nenhum alerta de pressão registrado ainda.</p>}
+                {historicoPressao.map((h, i) => (
+                  <div key={i} style={{ backgroundColor:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:'10px', padding:'12px 14px', marginBottom:'8px', borderLeft:'3px solid '+h.cor }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                      <span style={{ color: h.cor, fontSize:'12px', fontWeight:700 }}>{h.tipo}</span>
+                      <span style={{ color:'#4b5563', fontSize:'9px' }}>{h.data}</span>
+                    </div>
+                    <p style={{ color:'#9ca3af', fontSize:'11px', margin:'4px 0 0' }}>{h.valor}</p>
+                  </div>
+                ))}
+              </>)}
+
+              {/* Histórico Colisão */}
+              {histTab === 'colisao' && (<>
+                <p style={{ color:'#6b7280', fontSize:'10px', marginBottom:'10px', lineHeight:'1.4' }}>⚠️ Colisão detectada acima de 70 km/h. Contagem de 15s — se não responder, alerta enviado aos contatos.</p>
+                {historicoColisao.length === 0 && <p style={{ color:'#4b5563', fontSize:'11px', textAlign:'center', padding:'20px 0' }}>Nenhum alerta de colisão registrado ainda.</p>}
+                {historicoColisao.map((h, i) => (
+                  <div key={i} style={{ backgroundColor:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:'10px', padding:'12px 14px', marginBottom:'8px', borderLeft:'3px solid '+h.cor }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                      <span style={{ color: h.cor, fontSize:'12px', fontWeight:700 }}>{h.tipo}</span>
+                      <span style={{ color:'#4b5563', fontSize:'9px' }}>{h.data}</span>
+                    </div>
+                    <p style={{ color:'#9ca3af', fontSize:'11px', margin:'4px 0 0' }}>{h.valor}</p>
+                    <span style={{ fontSize:'9px', fontWeight:700, color: h.respondeu ? '#00ff6a' : '#ff5555', marginTop:'4px', display:'inline-block' }}>{h.respondeu ? '✓ Respondeu a tempo' : '✕ Alerta enviado aos contatos'}</span>
+                  </div>
+                ))}
+              </>)}
+            </section>
+          )}
+
+          {/* === ABA CONFIGURAÇÕES (protegida por PIN) === */}
+          {activeTab === 'config' && (
+            <section>
+              {!configPinVerified ? (
+                <div style={{ textAlign:'center', padding:'40px 0' }}>
+                  <div style={{ fontSize:'40px', marginBottom:'16px' }}>🔐</div>
+                  <h2 style={{ color:'#00e5ff', fontSize:'16px', fontWeight:900, marginBottom:'8px' }}>Configurações Protegidas</h2>
+                  <p style={{ color:'#6b7280', fontSize:'11px', marginBottom:'20px' }}>Digite seu PIN para acessar</p>
+                  <input type="password" inputMode="numeric" maxLength="8" value={configPinInput} onChange={(e) => { setConfigPinInput(e.target.value.replace(/\D/g,'')); setConfigPinError(''); }} onKeyDown={(e) => { if (e.key==='Enter') { verifyPIN(configPinInput).then(ok => { if(ok) setConfigPinVerified(true); else { setConfigPinError('PIN incorreto'); setConfigPinInput(''); }}); }}} placeholder="••••" style={{ width:'200px', padding:'14px', fontSize:'18px', textAlign:'center', background:'#1a1a1a', border: configPinError ? '2px solid #ff5555' : '2px solid #374151', borderRadius:'50px', color:'#00e5ff', fontWeight:600, letterSpacing:'6px', outline:'none' }} />
+                  {configPinError && <p style={{ color:'#ff5555', fontSize:'11px', marginTop:'8px' }}>{configPinError}</p>}
+                  <br/>
+                  <button onClick={async () => { const ok = await verifyPIN(configPinInput); if(ok) setConfigPinVerified(true); else { setConfigPinError('PIN incorreto'); setConfigPinInput(''); }}} style={{ marginTop:'16px', padding:'12px 32px', borderRadius:'50px', border:'2px solid #00e5ff', backgroundColor:'rgba(0,229,255,0.08)', color:'#00e5ff', fontWeight:900, fontSize:'13px', cursor:'pointer', boxShadow:'0 4px 15px rgba(0,229,255,0.2), 0 2px 4px rgba(0,0,0,0.3)', letterSpacing:'1px' }}>DESBLOQUEAR</button>
+                </div>
+              ) : (
+                <div>
+                  <h2 style={{ color:'rgba(0,229,255,0.8)', fontSize:'9px', fontWeight:700, marginBottom:'16px', letterSpacing:'2px', textTransform:'uppercase' }}>⚙️ Configurações de Alertas</h2>
+
+                  {/* Toggle FC */}
+                  <div style={{ backgroundColor:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:'14px', padding:'16px', marginBottom:'10px' }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'12px' }}>
+                      <span style={{ color:'#ff6eb4', fontSize:'13px', fontWeight:700 }}>💓 Batimentos Cardíacos</span>
+                      <div onClick={() => setAlertConfig({...alertConfig, fcAtiva:!alertConfig.fcAtiva})} style={{ width:'48px', height:'26px', borderRadius:'13px', backgroundColor: alertConfig.fcAtiva ? '#00ff6a' : '#374151', cursor:'pointer', position:'relative', transition:'all 0.3s', boxShadow: alertConfig.fcAtiva ? '0 0 10px rgba(0,255,106,0.4)' : 'none' }}>
+                        <div style={{ width:'22px', height:'22px', borderRadius:'50%', backgroundColor:'white', position:'absolute', top:'2px', left: alertConfig.fcAtiva ? '24px' : '2px', transition:'left 0.3s', boxShadow:'0 2px 4px rgba(0,0,0,0.3)' }}/>
+                      </div>
+                    </div>
+                    {alertConfig.fcAtiva && (
+                      <div style={{ display:'flex', gap:'10px' }}>
+                        <div style={{ flex:1 }}>
+                          <label style={{ color:'#6b7280', fontSize:'9px', display:'block', marginBottom:'4px' }}>FC Máxima (bpm)</label>
+                          <input type="number" value={alertConfig.fcMax} onChange={(e) => setAlertConfig({...alertConfig, fcMax: parseInt(e.target.value)||150})} style={{ width:'100%', padding:'10px', borderRadius:'10px', border:'1px solid #374151', background:'#0f0f0f', color:'#ff6eb4', fontSize:'14px', fontWeight:700, textAlign:'center', outline:'none' }} />
+                        </div>
+                        <div style={{ flex:1 }}>
+                          <label style={{ color:'#6b7280', fontSize:'9px', display:'block', marginBottom:'4px' }}>FC Mínima (bpm)</label>
+                          <input type="number" value={alertConfig.fcMin} onChange={(e) => setAlertConfig({...alertConfig, fcMin: parseInt(e.target.value)||40})} style={{ width:'100%', padding:'10px', borderRadius:'10px', border:'1px solid #374151', background:'#0f0f0f', color:'#5ba3ff', fontSize:'14px', fontWeight:700, textAlign:'center', outline:'none' }} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Toggle PA */}
+                  <div style={{ backgroundColor:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:'14px', padding:'16px', marginBottom:'10px' }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'12px' }}>
+                      <span style={{ color:'#5ba3ff', fontSize:'13px', fontWeight:700 }}>🩺 Pressão Arterial</span>
+                      <div onClick={() => setAlertConfig({...alertConfig, paAtiva:!alertConfig.paAtiva})} style={{ width:'48px', height:'26px', borderRadius:'13px', backgroundColor: alertConfig.paAtiva ? '#00ff6a' : '#374151', cursor:'pointer', position:'relative', transition:'all 0.3s', boxShadow: alertConfig.paAtiva ? '0 0 10px rgba(0,255,106,0.4)' : 'none' }}>
+                        <div style={{ width:'22px', height:'22px', borderRadius:'50%', backgroundColor:'white', position:'absolute', top:'2px', left: alertConfig.paAtiva ? '24px' : '2px', transition:'left 0.3s', boxShadow:'0 2px 4px rgba(0,0,0,0.3)' }}/>
+                      </div>
+                    </div>
+                    {alertConfig.paAtiva && (
+                      <div style={{ display:'flex', gap:'10px', flexWrap:'wrap' }}>
+                        <div style={{ flex:'1 1 45%' }}>
+                          <label style={{ color:'#6b7280', fontSize:'9px', display:'block', marginBottom:'4px' }}>PA Máx Sis (mmHg)</label>
+                          <input type="number" value={alertConfig.paMaxSis} onChange={(e) => setAlertConfig({...alertConfig, paMaxSis: parseInt(e.target.value)||180})} style={{ width:'100%', padding:'10px', borderRadius:'10px', border:'1px solid #374151', background:'#0f0f0f', color:'#ff5555', fontSize:'14px', fontWeight:700, textAlign:'center', outline:'none' }} />
+                        </div>
+                        <div style={{ flex:'1 1 45%' }}>
+                          <label style={{ color:'#6b7280', fontSize:'9px', display:'block', marginBottom:'4px' }}>PA Máx Dia (mmHg)</label>
+                          <input type="number" value={alertConfig.paMaxDia} onChange={(e) => setAlertConfig({...alertConfig, paMaxDia: parseInt(e.target.value)||120})} style={{ width:'100%', padding:'10px', borderRadius:'10px', border:'1px solid #374151', background:'#0f0f0f', color:'#ff5555', fontSize:'14px', fontWeight:700, textAlign:'center', outline:'none' }} />
+                        </div>
+                        <div style={{ flex:'1 1 45%' }}>
+                          <label style={{ color:'#6b7280', fontSize:'9px', display:'block', marginBottom:'4px' }}>PA Mín Sis (mmHg)</label>
+                          <input type="number" value={alertConfig.paMinSis} onChange={(e) => setAlertConfig({...alertConfig, paMinSis: parseInt(e.target.value)||80})} style={{ width:'100%', padding:'10px', borderRadius:'10px', border:'1px solid #374151', background:'#0f0f0f', color:'#5ba3ff', fontSize:'14px', fontWeight:700, textAlign:'center', outline:'none' }} />
+                        </div>
+                        <div style={{ flex:'1 1 45%' }}>
+                          <label style={{ color:'#6b7280', fontSize:'9px', display:'block', marginBottom:'4px' }}>PA Mín Dia (mmHg)</label>
+                          <input type="number" value={alertConfig.paMinDia} onChange={(e) => setAlertConfig({...alertConfig, paMinDia: parseInt(e.target.value)||50})} style={{ width:'100%', padding:'10px', borderRadius:'10px', border:'1px solid #374151', background:'#0f0f0f', color:'#5ba3ff', fontSize:'14px', fontWeight:700, textAlign:'center', outline:'none' }} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Toggle Velocidade */}
+                  <div style={{ backgroundColor:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:'14px', padding:'16px', marginBottom:'10px' }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'12px' }}>
+                      <span style={{ color:'#00ff6a', fontSize:'13px', fontWeight:700 }}>🚗 Limite de Velocidade</span>
+                      <div onClick={() => setAlertConfig({...alertConfig, velAtiva:!alertConfig.velAtiva})} style={{ width:'48px', height:'26px', borderRadius:'13px', backgroundColor: alertConfig.velAtiva ? '#00ff6a' : '#374151', cursor:'pointer', position:'relative', transition:'all 0.3s', boxShadow: alertConfig.velAtiva ? '0 0 10px rgba(0,255,106,0.4)' : 'none' }}>
+                        <div style={{ width:'22px', height:'22px', borderRadius:'50%', backgroundColor:'white', position:'absolute', top:'2px', left: alertConfig.velAtiva ? '24px' : '2px', transition:'left 0.3s', boxShadow:'0 2px 4px rgba(0,0,0,0.3)' }}/>
+                      </div>
+                    </div>
+                    {alertConfig.velAtiva && (
+                      <div>
+                        <label style={{ color:'#6b7280', fontSize:'9px', display:'block', marginBottom:'4px' }}>Velocidade Máxima (km/h)</label>
+                        <input type="number" value={alertConfig.velMax} onChange={(e) => setAlertConfig({...alertConfig, velMax: parseInt(e.target.value)||120})} style={{ width:'100%', padding:'10px', borderRadius:'10px', border:'1px solid #374151', background:'#0f0f0f', color:'#00ff6a', fontSize:'16px', fontWeight:700, textAlign:'center', outline:'none' }} />
+                        <p style={{ color:'#4b5563', fontSize:'9px', marginTop:'6px' }}>Alerta via Telegram se ultrapassar este limite</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Toggle Vibração */}
+                  <div style={{ backgroundColor:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:'14px', padding:'16px', marginBottom:'16px' }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                      <span style={{ color:'#e0e0e0', fontSize:'13px', fontWeight:700 }}>📳 Vibração Intensa (2s)</span>
+                      <div onClick={() => setAlertConfig({...alertConfig, vibrar:!alertConfig.vibrar})} style={{ width:'48px', height:'26px', borderRadius:'13px', backgroundColor: alertConfig.vibrar ? '#00ff6a' : '#374151', cursor:'pointer', position:'relative', transition:'all 0.3s', boxShadow: alertConfig.vibrar ? '0 0 10px rgba(0,255,106,0.4)' : 'none' }}>
+                        <div style={{ width:'22px', height:'22px', borderRadius:'50%', backgroundColor:'white', position:'absolute', top:'2px', left: alertConfig.vibrar ? '24px' : '2px', transition:'left 0.3s', boxShadow:'0 2px 4px rgba(0,0,0,0.3)' }}/>
+                      </div>
+                    </div>
+                    <p style={{ color:'#4b5563', fontSize:'9px', marginTop:'6px' }}>Celular e smartwatch vibram em qualquer alerta</p>
+                  </div>
+
+                  {/* Botão Salvar */}
+                  <button onClick={() => { localStorage.setItem('gv_alert_config', JSON.stringify(alertConfig)); playClick(); alert('✅ Configurações salvas!'); }} style={{ width:'100%', padding:'14px', borderRadius:'50px', border:'2px solid #00ff6a', backgroundColor:'rgba(0,255,106,0.08)', color:'#00ff6a', fontWeight:900, fontSize:'13px', cursor:'pointer', boxShadow:'0 4px 15px rgba(0,255,106,0.25), 0 2px 6px rgba(0,0,0,0.4), inset 0 1px 0 rgba(0,255,106,0.15)', letterSpacing:'1px', marginBottom:'10px', transition:'all 0.2s', textShadow:'0 0 6px rgba(0,255,106,0.3)' }}>💾 SALVAR CONFIGURAÇÕES</button>
+
+                  {/* Botão Testar Vibração */}
+                  <button onClick={() => { vibrateAlert(); playClick(); }} style={{ width:'100%', padding:'14px', borderRadius:'50px', border:'2px solid #00e5ff', backgroundColor:'rgba(0,229,255,0.08)', color:'#00e5ff', fontWeight:900, fontSize:'13px', cursor:'pointer', boxShadow:'0 4px 15px rgba(0,229,255,0.2), 0 2px 6px rgba(0,0,0,0.4), inset 0 1px 0 rgba(0,229,255,0.1)', letterSpacing:'1px', marginBottom:'10px', transition:'all 0.2s', textShadow:'0 0 6px rgba(0,229,255,0.3)' }}>📳 TESTAR VIBRAÇÃO</button>
+
+                  {/* Separador */}
+                  <div style={{ borderTop:'1px solid #2a2a2a', margin:'16px 0', paddingTop:'16px' }}>
+                    <h3 style={{ color:'rgba(0,229,255,0.8)', fontSize:'9px', fontWeight:700, marginBottom:'12px', letterSpacing:'2px', textTransform:'uppercase' }}>⌚ SINCRONIZAÇÃO DE RELÓGIO</h3>
+                    <p style={{ color:'#6b7280', fontSize:'10px', marginBottom:'12px', lineHeight:'1.4' }}>Conecte seu smartwatch via Bluetooth para monitorar batimentos cardíacos em tempo real. Compatível com: Galaxy Watch, Amazfit, Mi Band, Polar, Wear OS.</p>
+                    <button onClick={async () => {
+                      // PRIMEIRO: vibração nativa (feedback imediato)
+                      nativeVibrate(50);
+                      
+                      // SEGUNDO: tentar Bluetooth nativo do Cordova
+                      if (cordovaReady && window.bluetoothle) {
+                        try {
+                          alert('🔍 Buscando relógio via Bluetooth nativo...\n\nCertifique-se de que:\n1. Bluetooth do celular está ligado\n2. Relógio está próximo e ligado');
+                          
+                          nativeBluetoothScan((device) => {
+                            if (confirm('Relógio encontrado: ' + (device.name || 'Desconhecido') + '\n\nConectar?')) {
+                              nativeBluetoothConnect(device.address, (bpm) => {
+                                setHeartRate(bpm);
+                                setSensorStatus(s => ({...s, hr: 'ok'}));
+                              });
+                            }
+                          });
+                        } catch(err) {
+                          alert('❌ Erro Bluetooth nativo: ' + err.message);
+                        }
+                      } else {
+                        // Fallback: Web Bluetooth API (PWA / Chrome)
+                        await connectWebBluetooth();
+                      }
+                    }} style={{ width:'100%', padding:'14px', borderRadius:'50px', border:'2px solid #3b82f6', backgroundColor:'rgba(59,130,246,0.08)', color:'#3b82f6', fontWeight:900, fontSize:'13px', cursor:'pointer', boxShadow:'0 4px 15px rgba(59,130,246,0.2), 0 2px 6px rgba(0,0,0,0.4), inset 0 1px 0 rgba(59,130,246,0.1)', letterSpacing:'1px', transition:'all 0.2s', textShadow:'0 0 6px rgba(59,130,246,0.3)' }}>⌚ SINCRONIZAR RELÓGIO VIA BLUETOOTH</button>
+                    {sensorStatus.hr === 'ok' && <p style={{ color:'#00ff6a', fontSize:'10px', fontWeight:700, marginTop:'8px', textAlign:'center' }}>✅ Sensor de FC conectado — {heartRate != null ? heartRate + ' BPM' : 'aguardando...'}</p>}
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* Modal SOS com contagem regressiva */}
+          {sosAlert && (
+            <div style={{ position:'fixed', inset:0, display:'flex', alignItems:'center', justifyContent:'center', backgroundColor:'rgba(0,0,0,0.9)', zIndex:2000, padding:'24px' }}>
+              <div style={{ backgroundColor:'#1a1a1a', borderRadius:'20px', padding:'28px', maxWidth:'340px', width:'100%', textAlign:'center', border:'2px solid rgba(255,50,50,0.6)', boxShadow:'0 0 40px rgba(255,50,50,0.4), 0 0 80px rgba(255,50,50,0.2)', animation:'pulse 1s infinite' }}>
+                <div style={{ fontSize:'48px', marginBottom:'12px' }}>🚨</div>
+                <h2 style={{ color:'#ff4444', fontSize:'18px', fontWeight:900, margin:'0 0 6px', textShadow:'0 0 10px rgba(255,68,68,0.5)' }}>SOS ATIVADO</h2>
+                <p style={{ color:'#9ca3af', fontSize:'12px', margin:'0 0 16px' }}>Alerta de emergência será enviado automaticamente</p>
+                <div style={{ width:'80px', height:'80px', borderRadius:'50%', border:'4px solid #ff4444', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 16px', boxShadow:'0 0 20px rgba(255,68,68,0.4)' }}>
+                  <span style={{ fontSize:'32px', fontWeight:900, color:'#ff4444', textShadow:'0 0 8px rgba(255,68,68,0.6)' }}>{sosCountdown}</span>
+                </div>
+                <p style={{ color:'#ff9999', fontSize:'11px', margin:'0 0 20px', lineHeight:'1.4' }}>Enviando alerta em {sosCountdown}s...<br/>Toque abaixo para cancelar.</p>
+                <button onClick={() => { setSosAlert(false); setSosCountdown(15); }} style={{ width:'100%', padding:'14px', borderRadius:'12px', border:'2px solid #00ff6a', backgroundColor:'rgba(0,255,106,0.1)', color:'#00ff6a', fontWeight:900, fontSize:'14px', cursor:'pointer', boxShadow:'0 0 15px rgba(0,255,106,0.3)', textShadow:'0 0 6px rgba(0,255,106,0.4)' }}>✓ CANCELAR — ESTOU BEM</button>
+              </div>
+            </div>
+          )}
+
+          {/* Modal Alerta de Colisão */}
+          {crashAlert && (
+            <div style={{ position:'fixed', inset:0, display:'flex', alignItems:'center', justifyContent:'center', backgroundColor:'rgba(0,0,0,0.95)', zIndex:2000, padding:'24px' }}>
+              <div style={{ backgroundColor: alertPriority==='critico' ? '#1a0000' : '#1a1a1a', borderRadius:'20px', padding:'28px', maxWidth:'340px', width:'100%', textAlign:'center', border: alertPriority==='critico' ? '3px solid #ff0000' : '2px solid rgba(255,50,50,0.6)', boxShadow: alertPriority==='critico' ? '0 0 60px rgba(255,0,0,0.6), 0 0 120px rgba(255,0,0,0.3)' : '0 0 40px rgba(255,50,50,0.4), 0 0 80px rgba(255,50,50,0.2)', animation:'pulse 0.5s infinite' }}>
+                <div style={{ fontSize:'48px', marginBottom:'12px' }}>{alertPriority==='critico' ? '💀' : '🚨'}</div>
+                <h2 style={{ color: alertPriority==='critico' ? '#ff0000' : '#ff4444', fontSize: alertPriority==='critico' ? '16px' : '18px', fontWeight:900, margin:'0 0 6px', textShadow:'0 0 10px rgba(255,0,0,0.7)' }}>
+                  {alertPriority==='critico' ? 'COLISÃO CRÍTICA — FC PAROU' : 'COLISÃO DETECTADA'}
+                </h2>
+                {alertPriority==='critico' && (
+                  <div style={{ background:'rgba(255,0,0,0.15)', border:'1px solid rgba(255,0,0,0.4)', borderRadius:'8px', padding:'8px', margin:'0 0 12px' }}>
+                    <p style={{ color:'#ff4444', fontSize:'11px', fontWeight:700, margin:0 }}>⚠️ BATIMENTOS CARDÍACOS: {heartRate} bpm</p>
+                    <p style={{ color:'#ff6666', fontSize:'10px', margin:'4px 0 0' }}>Prioridade elevada — possível inconsciência</p>
+                  </div>
+                )}
+                <p style={{ color:'#9ca3af', fontSize:'12px', margin:'0 0 12px' }}>Velocidade no impacto: {speed} km/h</p>
+                
+                <div style={{ width:'80px', height:'80px', borderRadius:'50%', border: alertPriority==='critico' ? '5px solid #ff0000' : '4px solid #ff4444', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 16px', boxShadow: alertPriority==='critico' ? '0 0 30px rgba(255,0,0,0.6)' : '0 0 20px rgba(255,68,68,0.4)' }}>
+                  <span style={{ fontSize:'32px', fontWeight:900, color: alertPriority==='critico' ? '#ff0000' : '#ff4444', textShadow:'0 0 8px rgba(255,0,0,0.6)' }}>{crashCountdown}</span>
+                </div>
+
+                <p style={{ color:'#ff9999', fontSize:'11px', margin:'0 0 20px', lineHeight:'1.4' }}>
+                  {alertPriority==='critico' 
+                    ? <>⚠️ ALERTA MÁXIMO em {crashCountdown}s<br/>Timer reduzido — FC crítica detectada</>
+                    : <>Alerta será enviado aos contatos em {crashCountdown}s.<br/>Toque abaixo se você está bem.</>
+                  }
+                </p>
+
+                <button onClick={() => { setCrashAlert(false); setCrashCountdown(15); setAlertPriority('normal'); setHistoricoColisao(h => [{ valor: speed+' km/h — Impacto detectado', tipo:'Quase Colisão', data: agora(), cor:'#ff9500', respondeu:true }, ...h].slice(0,20)); }} style={{ width:'100%', padding:'14px', borderRadius:'12px', border:'2px solid #00ff6a', backgroundColor:'rgba(0,255,106,0.1)', color:'#00ff6a', fontWeight:900, fontSize:'14px', cursor:'pointer', boxShadow:'0 0 15px rgba(0,255,106,0.3)', textShadow:'0 0 6px rgba(0,255,106,0.4)' }}>
+                  ✓ ESTOU BEM
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Footer / Tabs */}
+          {/* Modal Alerta FC */}
+          {fcAlert && (
+            <div style={{ position:'fixed', inset:0, display:'flex', alignItems:'center', justifyContent:'center', backgroundColor:'rgba(0,0,0,0.9)', zIndex:2000, padding:'24px' }}>
+              <div style={{ backgroundColor:'#1a1a1a', borderRadius:'20px', padding:'28px', maxWidth:'340px', width:'100%', textAlign:'center', border:'2px solid rgba(255,110,180,0.6)', boxShadow:'0 0 40px rgba(255,110,180,0.4)', animation:'pulse 1s infinite' }}>
+                <div style={{ fontSize:'48px', marginBottom:'12px' }}>💓</div>
+                <h2 style={{ color:'#ff6eb4', fontSize:'16px', fontWeight:900, margin:'0 0 6px', textShadow:'0 0 10px rgba(255,110,180,0.5)' }}>{fcAlertType}</h2>
+                <p style={{ color:'#9ca3af', fontSize:'12px', margin:'0 0 16px' }}>Frequência cardíaca: <strong style={{color:'#ff6eb4'}}>{heartRate} bpm</strong></p>
+                <div style={{ width:'70px', height:'70px', borderRadius:'50%', border:'4px solid #ff6eb4', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 16px', boxShadow:'0 0 20px rgba(255,110,180,0.4)' }}>
+                  <span style={{ fontSize:'28px', fontWeight:900, color:'#ff6eb4' }}>{fcCountdown}</span>
+                </div>
+                <p style={{ color:'#ffaacc', fontSize:'11px', margin:'0 0 20px', lineHeight:'1.4' }}>Alerta será enviado aos contatos em {fcCountdown}s.<br/>Toque abaixo se você está bem.</p>
+                <button onClick={() => { setFcAlert(false); setFcCountdown(15); }} style={{ width:'100%', padding:'14px', borderRadius:'12px', border:'2px solid #00ff6a', backgroundColor:'rgba(0,255,106,0.1)', color:'#00ff6a', fontWeight:900, fontSize:'14px', cursor:'pointer', boxShadow:'0 0 15px rgba(0,255,106,0.3)' }}>✓ ESTOU BEM</button>
+              </div>
+            </div>
+          )}
+
+          {/* Modal Alerta Pressão */}
+          {paAlert && (
+            <div style={{ position:'fixed', inset:0, display:'flex', alignItems:'center', justifyContent:'center', backgroundColor:'rgba(0,0,0,0.9)', zIndex:2000, padding:'24px' }}>
+              <div style={{ backgroundColor:'#1a1a1a', borderRadius:'20px', padding:'28px', maxWidth:'340px', width:'100%', textAlign:'center', border:'2px solid rgba(91,163,255,0.6)', boxShadow:'0 0 40px rgba(91,163,255,0.4)', animation:'pulse 1s infinite' }}>
+                <div style={{ fontSize:'48px', marginBottom:'12px' }}>🩺</div>
+                <h2 style={{ color: paAlertType.includes('HIPER') ? '#ff5555' : '#5ba3ff', fontSize:'16px', fontWeight:900, margin:'0 0 6px', textShadow:'0 0 10px rgba(91,163,255,0.5)' }}>{paAlertType}</h2>
+                <p style={{ color:'#9ca3af', fontSize:'12px', margin:'0 0 16px' }}>Pressão arterial: <strong style={{color: paAlertType.includes('HIPER') ? '#ff5555' : '#5ba3ff'}}>{pressaoSis}/{pressaoDia} mmHg</strong></p>
+                <div style={{ width:'70px', height:'70px', borderRadius:'50%', border:'4px solid '+(paAlertType.includes('HIPER')?'#ff5555':'#5ba3ff'), display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 16px', boxShadow:'0 0 20px '+(paAlertType.includes('HIPER')?'rgba(255,85,85,0.4)':'rgba(91,163,255,0.4)') }}>
+                  <span style={{ fontSize:'28px', fontWeight:900, color: paAlertType.includes('HIPER')?'#ff5555':'#5ba3ff' }}>{paCountdown}</span>
+                </div>
+                <p style={{ color:'#aaccff', fontSize:'11px', margin:'0 0 20px', lineHeight:'1.4' }}>Alerta será enviado aos contatos em {paCountdown}s.<br/>Toque abaixo se você está bem.</p>
+                <button onClick={() => { setPaAlert(false); setPaCountdown(15); }} style={{ width:'100%', padding:'14px', borderRadius:'12px', border:'2px solid #00ff6a', backgroundColor:'rgba(0,255,106,0.1)', color:'#00ff6a', fontWeight:900, fontSize:'14px', cursor:'pointer', boxShadow:'0 0 15px rgba(0,255,106,0.3)' }}>✓ ESTOU BEM</button>
+              </div>
+            </div>
+          )}
+
+          <p style={{ textAlign:'center', color:'#2a2a2a', fontSize:'8px', padding:'8px 0 80px', letterSpacing:'1px' }}>© 2026 Paulo Sergio Bresciani Junior — GuardiaVia v2.0</p>
+          <nav style={{ position:'fixed', bottom:0, left:0, right:0, backgroundColor:'#1a1a1a', borderTop:'1px solid #2a2a2a', display:'flex', justifyContent:'space-around', padding:'10px 0 16px', zIndex:100 }}>
+            {[
+              { id:'monitor', label:'Monitor', desc:'Tempo real', icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={activeTab==='monitor'?'#00ff6a':'#6b7280'} strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg> },
+              { id:'ficha', label:'Ficha Médica', desc:'Dados de saúde', icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={activeTab==='ficha'?'#00ff6a':'#6b7280'} strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg> },
+              { id:'contatos', label:'Contatos', desc:'Emergência', icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={activeTab==='contatos'?'#00ff6a':'#6b7280'} strokeWidth="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> },
+              { id:'historico', label:'Histórico', desc:'Alertas passados', icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={activeTab==='historico'?'#00ff6a':'#6b7280'} strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> },
+              { id:'config', label:'Config', desc:'Ajustes', icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={activeTab==='config'?'#00e5ff':'#6b7280'} strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> },
+            ].map((tab) => (
+              <button key={tab.id} onClick={() => { setActiveTab(tab.id); playClick(); }} style={{ background:'none', border:'none', cursor:'pointer', display:'flex', flexDirection:'column', alignItems:'center', gap:'2px' }}>
+                {tab.icon}
+                <span style={{ fontSize:'10px', color: activeTab===tab.id ? '#00ff6a' : '#9ca3af', fontWeight:700 }}>{tab.label}</span>
+                <span style={{ fontSize:'8px', color: activeTab===tab.id ? 'rgba(0,255,106,0.6)' : '#4b5563' }}>{tab.desc}</span>
+              </button>
+            ))}
+          </nav>
+        </div>
+      );
+    }
+
+    // App Root com Security Gate
+    function SecureApp() {
+      const [authState, setAuthState] = useState('loading'); // loading, setup, locked, unlocked
+      const inactivityTimer = useRef(null);
+
+      useEffect(() => {
+        if (!checkIntegrity()) {
+          // Integridade comprometida — forçar novo setup
+          localStorage.removeItem(SECURITY_CONFIG.SETUP_KEY);
+        }
+        if (!isSetupDone()) { setAuthState('setup'); return; }
+        if (!hasPIN()) { setAuthState('unlocked'); return; }
+        setAuthState('locked');
+      }, []);
+
+      // Bloqueio por inatividade (5 min)
+      useEffect(() => {
+        if (authState !== 'unlocked') return;
+        const resetTimer = () => {
+          if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+          localStorage.setItem(SECURITY_CONFIG.LAST_ACTIVITY_KEY, String(Date.now()));
+          inactivityTimer.current = setTimeout(() => {
+            setAuthState('locked');
+          }, SECURITY_CONFIG.LOCK_TIMEOUT);
+        };
+        // Eventos de atividade
+        const events = ['touchstart', 'click', 'scroll', 'keydown'];
+        events.forEach(e => document.addEventListener(e, resetTimer, { passive: true }));
+        resetTimer();
+        // Bloquear ao sair do app (visibilitychange)
+        const handleVisibility = () => {
+          if (document.visibilityState === 'hidden') {
+            localStorage.setItem(SECURITY_CONFIG.LAST_ACTIVITY_KEY, String(Date.now()));
+          }
+          if (document.visibilityState === 'visible') {
+            const last = parseInt(localStorage.getItem(SECURITY_CONFIG.LAST_ACTIVITY_KEY) || '0');
+            if (Date.now() - last > SECURITY_CONFIG.LOCK_TIMEOUT) {
+              setAuthState('locked');
+            }
+          }
+        };
+        document.addEventListener('visibilitychange', handleVisibility);
+        return () => {
+          events.forEach(e => document.removeEventListener(e, resetTimer));
+          document.removeEventListener('visibilitychange', handleVisibility);
+          if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+        };
+      }, [authState]);
+
+      if (authState === 'loading') return <div style={{ minHeight:'100vh', background:'#0f0f0f', display:'flex', alignItems:'center', justifyContent:'center' }}><div style={{ color:'#00ff6a', fontSize:'14px' }}>Carregando...</div></div>;
+      if (authState === 'setup') return <SecuritySetup onComplete={() => setAuthState('unlocked')} />;
+      if (authState === 'locked') return <LockScreen onUnlock={() => setAuthState('unlocked')} />;
+      return <App />;
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<SecureApp />);
+  </script>
+</body>
+</html>

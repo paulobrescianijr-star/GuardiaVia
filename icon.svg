@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <!-- Background gradient -->
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#020b1a"/>
+      <stop offset="40%" stop-color="#0a1e3d"/>
+      <stop offset="70%" stop-color="#101845"/>
+      <stop offset="100%" stop-color="#050a14"/>
+    </linearGradient>
+    <!-- Shield metallic body -->
+    <linearGradient id="shieldMetal" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a8a6b" stop-opacity="0.95"/>
+      <stop offset="20%" stop-color="#0d5e4a"/>
+      <stop offset="40%" stop-color="#2a6a3a"/>
+      <stop offset="55%" stop-color="#0a4a3f"/>
+      <stop offset="75%" stop-color="#3a5a1a"/>
+      <stop offset="100%" stop-color="#8b7a14" stop-opacity="0.9"/>
+    </linearGradient>
+    <!-- Brushed metal overlay -->
+    <linearGradient id="brushed" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="white" stop-opacity="0.08"/>
+      <stop offset="25%" stop-color="white" stop-opacity="0"/>
+      <stop offset="50%" stop-color="white" stop-opacity="0.05"/>
+      <stop offset="75%" stop-color="white" stop-opacity="0"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0.03"/>
+    </linearGradient>
+    <!-- Glass reflection -->
+    <linearGradient id="glass" x1="50%" y1="0%" x2="50%" y2="60%">
+      <stop offset="0%" stop-color="white" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0"/>
+    </linearGradient>
+    <!-- Neon glow border -->
+    <linearGradient id="neonBorder" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00e5ff"/>
+      <stop offset="30%" stop-color="#00ffd5"/>
+      <stop offset="60%" stop-color="#00ff9d"/>
+      <stop offset="100%" stop-color="#00e5ff"/>
+    </linearGradient>
+    <!-- Filters -->
+    <filter id="neonGlow">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feComposite in="blur" in2="SourceGraphic" operator="over"/>
+    </filter>
+    <filter id="shieldShadow">
+      <feDropShadow dx="0" dy="4" stdDeviation="12" flood-color="#000000" flood-opacity="0.5"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="20" flood-color="#00e5ff" flood-opacity="0.2"/>
+    </filter>
+    <filter id="innerGlow">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="textShadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#00e5ff" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <!-- Rounded background -->
+  <rect width="512" height="512" rx="108" fill="url(#bg)"/>
+  
+  <!-- Hex grid pattern -->
+  <g opacity="0.05">
+    <path d="M128 0L192 37V111L128 148L64 111V37Z" fill="none" stroke="#00e5ff" stroke-width="0.6"/>
+    <path d="M256 0L320 37V111L256 148L192 111V37Z" fill="none" stroke="#00e5ff" stroke-width="0.6"/>
+    <path d="M384 0L448 37V111L384 148L320 111V37Z" fill="none" stroke="#00e5ff" stroke-width="0.6"/>
+    <path d="M64 128L128 165V239L64 276L0 239V165Z" fill="none" stroke="#00e5ff" stroke-width="0.6"/>
+    <path d="M192 128L256 165V239L192 276L128 239V165Z" fill="none" stroke="#00e5ff" stroke-width="0.6"/>
+    <path d="M320 128L384 165V239L320 276L256 239V165Z" fill="none" stroke="#00e5ff" stroke-width="0.6"/>
+    <path d="M448 128L512 165V239L448 276L384 239V165Z" fill="none" stroke="#00e5ff" stroke-width="0.6"/>
+    <path d="M128 256L192 293V367L128 404L64 367V293Z" fill="none" stroke="#00e5ff" stroke-width="0.6"/>
+    <path d="M256 256L320 293V367L256 404L192 367V293Z" fill="none" stroke="#00e5ff" stroke-width="0.6"/>
+    <path d="M384 256L448 293V367L384 404L320 367V293Z" fill="none" stroke="#00e5ff" stroke-width="0.6"/>
+    <path d="M64 384L128 421V495L64 512L0 495V421Z" fill="none" stroke="#00e5ff" stroke-width="0.6"/>
+    <path d="M192 384L256 421V495L192 512L128 495V421Z" fill="none" stroke="#00e5ff" stroke-width="0.6"/>
+    <path d="M320 384L384 421V495L320 512L256 495V421Z" fill="none" stroke="#00e5ff" stroke-width="0.6"/>
+    <path d="M448 384L512 421V495L448 512L384 495V421Z" fill="none" stroke="#00e5ff" stroke-width="0.6"/>
+  </g>
+
+  <!-- Ambient glow behind shield -->
+  <ellipse cx="256" cy="260" rx="140" ry="155" fill="#00e5ff" opacity="0.04"/>
+  <ellipse cx="256" cy="260" rx="100" ry="120" fill="#00e5ff" opacity="0.03"/>
+
+  <!-- 3D Shield with drop shadow + neon border -->
+  <g filter="url(#shieldShadow)">
+    <!-- Shield body (metallic) -->
+    <path d="M256 65 L405 145 L405 305 Q405 415 256 470 Q107 415 107 305 L107 145 Z" fill="url(#shieldMetal)"/>
+    <!-- Brushed metal texture -->
+    <path d="M256 65 L405 145 L405 305 Q405 415 256 470 Q107 415 107 305 L107 145 Z" fill="url(#brushed)"/>
+    <!-- Glass reflection top -->
+    <path d="M256 65 L405 145 L405 230 Q300 260 256 200 Q200 260 107 230 L107 145 Z" fill="url(#glass)"/>
+    <!-- Neon border -->
+    <path d="M256 65 L405 145 L405 305 Q405 415 256 470 Q107 415 107 305 L107 145 Z" fill="none" stroke="url(#neonBorder)" stroke-width="4"/>
+    <!-- Neon border glow layer -->
+    <path d="M256 65 L405 145 L405 305 Q405 415 256 470 Q107 415 107 305 L107 145 Z" fill="none" stroke="#00e5ff" stroke-width="2" opacity="0.4" filter="url(#neonGlow)"/>
+  </g>
+
+  <!-- Inner rim -->
+  <path d="M256 82 L393 155 L393 300 Q393 400 256 452 Q119 400 119 300 L119 155 Z" fill="none" stroke="rgba(0,229,255,0.1)" stroke-width="1.2"/>
+
+  <!-- Grid rings -->
+  <circle cx="256" cy="270" r="95" fill="none" stroke="rgba(0,229,255,0.08)" stroke-width="0.8"/>
+  <circle cx="256" cy="270" r="68" fill="none" stroke="rgba(0,229,255,0.06)" stroke-width="0.6"/>
+  <circle cx="256" cy="270" r="40" fill="none" stroke="rgba(0,229,255,0.04)" stroke-width="0.4"/>
+  <!-- Cross -->
+  <line x1="256" y1="175" x2="256" y2="365" stroke="rgba(0,229,255,0.04)" stroke-width="0.6"/>
+  <line x1="161" y1="270" x2="351" y2="270" stroke="rgba(0,229,255,0.04)" stroke-width="0.6"/>
+
+  <!-- Heartbeat line (main feature) -->
+  <polyline points="138,270 198,270 215,225 238,325 262,240 282,298 300,260 315,270 375,270" fill="none" stroke="#00e5ff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" filter="url(#innerGlow)"/>
+  <!-- Heartbeat shadow -->
+  <polyline points="138,270 198,270 215,225 238,325 262,240 282,298 300,260 315,270 375,270" fill="none" stroke="#00e5ff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" opacity="0.15"/>
+
+  <!-- Core pulse (center dot) -->
+  <circle cx="256" cy="270" r="14" fill="#00e5ff" opacity="0.15"/>
+  <circle cx="256" cy="270" r="8" fill="#00e5ff" opacity="0.5"/>
+  <circle cx="256" cy="270" r="4" fill="#ffffff" opacity="0.9"/>
+
+  <!-- Text "GUARDIAVIA" with 3D shadow -->
+  <text x="256" y="503" text-anchor="middle" fill="#ffffff" font-family="system-ui, -apple-system, sans-serif" font-size="30" font-weight="900" letter-spacing="5" opacity="0.95" filter="url(#textShadow)">GUARDIAVIA</text>
+</svg>

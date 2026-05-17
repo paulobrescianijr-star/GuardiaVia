@@ -1,0 +1,80 @@
+<?xml version='1.0' encoding='utf-8'?>
+<widget id="com.guardiavia.app"
+        version="2.0.0"
+        xmlns="http://www.w3.org/ns/widgets"
+        xmlns:cdv="http://cordova.apache.org/ns/1.0">
+
+    <name>GuardiaVia</name>
+    <description>Proteção veicular e saúde em tempo real</description>
+    <author email="paulo@guardiavia.com" href="https://guardiavia.netlify.app">Paulo Sergio Bresciani Junior</author>
+
+    <!-- Configurações do app -->
+    <content src="index.html" />
+    <access origin="*" />
+    <allow-intent href="http://*/*" />
+    <allow-intent href="https://*/*" />
+    <allow-intent href="tel:*" />
+    <allow-intent href="sms:*" />
+    <allow-intent href="mailto:*" />
+    <allow-navigation href="*" />
+
+    <!-- Preferências Android -->
+    <preference name="Orientation" value="portrait" />
+    <preference name="Fullscreen" value="false" />
+    <preference name="BackgroundColor" value="#0f0f0f" />
+    <preference name="StatusBarBackgroundColor" value="#0f0f0f" />
+    <preference name="StatusBarStyle" value="lightcontent" />
+    <preference name="DisallowOverscroll" value="true" />
+    <preference name="AndroidPersistentFileLocation" value="Compatibility" />
+    <preference name="AndroidExtraFilesystems" value="files,files-external,documents,sdcard,cache,cache-external,assets,root" />
+    <preference name="SplashScreenDelay" value="2000" />
+    <preference name="FadeSplashScreenDuration" value="500" />
+    <preference name="ShowSplashScreenSpinner" value="false" />
+    <preference name="SplashScreenBackgroundColor" value="#0f0f0f" />
+
+    <!-- PERMISSÕES NATIVAS DO ANDROID -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+
+    <!-- FEATURES -->
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.vibrate" android:required="false" />
+
+    <!-- Ícones -->
+    <icon src="res/icon/android/icon-36-ldpi.png" density="ldpi" />
+    <icon src="res/icon/android/icon-48-mdpi.png" density="mdpi" />
+    <icon src="res/icon/android/icon-72-hdpi.png" density="hdpi" />
+    <icon src="res/icon/android/icon-96-xhdpi.png" density="xhdpi" />
+    <icon src="res/icon/android/icon-144-xxhdpi.png" density="xxhdpi" />
+    <icon src="res/icon/android/icon-192-xxxhdpi.png" density="xxxhdpi" />
+
+    <!-- Splash screens -->
+    <splash src="res/screen/android/splash-land-hdpi.png" density="land-hdpi" />
+    <splash src="res/screen/android/splash-land-ldpi.png" density="land-ldpi" />
+    <splash src="res/screen/android/splash-land-mdpi.png" density="land-mdpi" />
+    <splash src="res/screen/android/splash-land-xhdpi.png" density="land-xhdpi" />
+    <splash src="res/screen/android/splash-land-xxhdpi.png" density="land-xxhdpi" />
+    <splash src="res/screen/android/splash-land-xxxhdpi.png" density="land-xxxhdpi" />
+    <splash src="res/screen/android/splash-port-hdpi.png" density="port-hdpi" />
+    <splash src="res/screen/android/splash-port-ldpi.png" density="port-ldpi" />
+    <splash src="res/screen/android/splash-port-mdpi.png" density="port-mdpi" />
+    <splash src="res/screen/android/splash-port-xhdpi.png" density="port-xhdpi" />
+    <splash src="res/screen/android/splash-port-xxhdpi.png" density="port-xxhdpi" />
+    <splash src="res/screen/android/splash-port-xxxhdpi.png" density="port-xxxhdpi" />
+
+</widget>
