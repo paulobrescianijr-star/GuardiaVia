@@ -32,7 +32,7 @@ jobs:
     - name: Install Dependencies
       run: npm install
 
-    - name: Organize WWW Folder and Fix Icons
+    - name: Organize WWW Folder and Fix config.xml
       run: |
         mkdir -p www
         cp index.html www/ 2>/dev/null || true
@@ -40,9 +40,13 @@ jobs:
         cp ícone.svg www/ 2>/dev/null || true
         cp manifest.json www/ 2>/dev/null || true
         cp sw.js www/ 2>/dev/null || true
-        # Remove referencias de icones que nao existem para nao quebrar o build
+        
+        # Remove referências de ícones que não existem para não quebrar o build
         sed -i '/<icon/d' config.xml
         sed -i '/res\/icon/d' config.xml
+        
+        # Corrige o erro de "AttributePrefixUnbound" injetando o namespace do Android no config.xml
+        sed -i 's/<widget/<widget xmlns:android="http:\/\/schemas.android.com\/apk\/res\/android"/g' config.xml
 
     - name: Add Android Platform
       run: cordova platform add android@13.0.0
