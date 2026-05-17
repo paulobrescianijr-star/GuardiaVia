@@ -32,31 +32,66 @@ jobs:
     - name: Install Dependencies
       run: npm install
 
-    - name: Organize WWW Folder and Fix config.xml
+    - name: Organize WWW Folder
       run: |
         mkdir -p www
-        
-        # Copia os arquivos essenciais exatamente como estão, sem corromper o index.html
         for item in *; do
           if [ "$item" != "www" ] && [ "$item" != "platforms" ] && [ "$item" != "plugins" ] && [ "$item" != "config.xml" ] && [ "$item" != "BUILD-APK.bat" ] && [ "$item" != "node_modules" ] && [ "$item" != "app-icon.png" ]; then
             cp -r "$item" www/ 2>/dev/null || true
           fi
         done
-        
-        # Remove referências antigas de ícones para não quebrar o build
+
+    - name: Inject Error Detector into index.html
+      run: |
+        cat << 'EOF' > inject-debug.js
+        const fs = require("fs");
+        if (fs.existsSync("www/index.html")) {
+          let html = fs.readFileSync("www/index.html", "utf8");
+          
+          // Libera as políticas de segurança (CSP) para não bloquear o código do Verdent
+          html = html.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/i, 
+            `<meta http-equiv="Content-Security-Policy" content="default-src * 'unsafe-inline' 'unsafe-eval' data: blob: file:; script-src * 'unsafe-inline' 'unsafe-eval'; style-src * 'unsafe-inline';">`
+          );
+          
+          // Injeta o detector que vai soltar o alerta com o erro na tela do celular
+          const debugScript = `
+          <script>
+            setTimeout(function() {
+              alert("SINAL DE VIDA: O arquivo index.html abriu com sucesso!");
+            }, 800);
+            
+            window.onerror = function(msg, url, line, col, error) {
+              alert("💥 ERRO DE JAVASCRIPT DECTECTADO:\\n\\n" + msg + "\\n\\nLinha: " + line + "\\nArquivo: " + url);
+              return false;
+            };
+            
+            window.addEventListener("unhandledrejection", function(event) {
+              alert("⏳ FALHA INTERNA (Promise):\\n\\n" + event.reason);
+            });
+          </script>
+          `;
+          
+          if (html.toLowerCase().includes("<head>")) {
+            html = html.replace(/<head>/i, "<head>" + debugScript);
+          } else {
+            html = debugScript + html;
+          }
+          
+          fs.writeFileSync("www/index.html", html, "utf8");
+          console.log("Detector de erros injetado com sucesso!");
+        }
+        EOF
+        node inject-debug.js
+
+    - name: Fix config.xml Cordova Preferences
+      run: |
         sed -i '/<icon/d' config.xml
         sed -i '/res\/icon/d' config.xml
-        
-        # Corrige o namespace do Android
         sed -i 's/<widget/<widget xmlns:android="http:\/\/schemas.android.com\/apk\/res\/android"/g' config.xml
-        
-        # Ativa o seu ícone verde automaticamente se o arquivo existir
         if [ -f "app-icon.png" ]; then
           cp app-icon.png www/ 2>/dev/null || true
           sed -i '/<widget /a \    <icon src="www/app-icon.png" />' config.xml
         fi
-        
-        # Configuração ideal para o Moto G54: cria um servidor seguro interno que aceita caminhos com "/" e libera a rede
         sed -i 's|<\/widget>|    <access origin="*" />\n    <allow-navigation href="*" />\n    <allow-intent href="*" />\n    <preference name="scheme" value="https" />\n    <preference name="hostname" value="localhost" />\n    <preference name="CleartextTraffic" value="true" />\n<\/widget>|g' config.xml
 
     - name: Add Android Platform
