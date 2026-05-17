@@ -36,22 +36,28 @@ jobs:
       run: |
         mkdir -p www
         
-        # Copia apenas os arquivos essenciais do site, ignorando pastas pesadas do sistema
+        # Copia os arquivos essenciais, ignorando pastas pesadas do sistema
         for item in *; do
-          if [ "$item" != "www" ] && [ "$item" != "platforms" ] && [ "$item" != "plugins" ] && [ "$item" != "config.xml" ] && [ "$item" != "BUILD-APK.bat" ] && [ "$item" != "node_modules" ]; then
+          if [ "$item" != "www" ] && [ "$item" != "platforms" ] && [ "$item" != "plugins" ] && [ "$item" != "config.xml" ] && [ "$item" != "BUILD-APK.bat" ] && [ "$item" != "node_modules" ] && [ "$item" != "app-icon.png" ]; then
             cp -r "$item" www/ 2>/dev/null || true
           fi
         done
         
-        # Remove referências de ícones ausentes
+        # Remove referências de ícones antigos que quebram o build
         sed -i '/<icon/d' config.xml
         sed -i '/res\/icon/d' config.xml
         
         # Corrige o namespace do Android
         sed -i 's/<widget/<widget xmlns:android="http:\/\/schemas.android.com\/apk\/res\/android"/g' config.xml
         
-        # Ativa o modo moderno HTTPS para tirar a tela preta e rodar o Service Worker
-        sed -i 's|<\/widget>|    <preference name="scheme" value="https" />\n    <preference name="hostname" value="localhost" />\n<\/widget>|g' config.xml
+        # Se você tiver enviado o arquivo app-icon.png, ele ativa o ícone automaticamente
+        if [ -f "app-icon.png" ]; then
+          cp app-icon.png www/ 2>/dev/null || true
+          sed -i '/<widget /a \    <icon src="www/app-icon.png" />' config.xml
+        fi
+        
+        # Libera o acesso à rede mantendo o padrão file:// exigido pelo Verdent para tirar a tela preta
+        sed -i 's|<\/widget>|    <access origin="*" />\n    <allow-navigation href="*" />\n    <allow-intent href="*" />\n    <preference name="CleartextTraffic" value="true" />\n<\/widget>|g' config.xml
 
     - name: Add Android Platform
       run: cordova platform add android@13.0.0
