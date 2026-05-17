@@ -36,9 +36,9 @@ jobs:
       run: |
         mkdir -p www
         
-        # Copia absolutamente todos os arquivos e pastas para dentro de www
+        # Copia apenas os arquivos essenciais do site, ignorando pastas pesadas do sistema
         for item in *; do
-          if [ "$item" != "www" ] && [ "$item" != "platforms" ] && [ "$item" != "plugins" ] && [ "$item" != "config.xml" ] && [ "$item" != "BUILD-APK.bat" ]; then
+          if [ "$item" != "www" ] && [ "$item" != "platforms" ] && [ "$item" != "plugins" ] && [ "$item" != "config.xml" ] && [ "$item" != "BUILD-APK.bat" ] && [ "$item" != "node_modules" ]; then
             cp -r "$item" www/ 2>/dev/null || true
           fi
         done
@@ -63,4 +63,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: GuardiaVia-APK-Debug
-        path: platforms/android/app/build/outputs/apk/debug/app-debug.apk
+        path: platforms/android/app/build/outputs/apk/**/*.apk
