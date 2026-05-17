@@ -1,4 +1,3 @@
-
 name: Build GuardiaVia APK
 
 on:
@@ -33,13 +32,17 @@ jobs:
     - name: Install Dependencies
       run: npm install
 
-    - name: Organize WWW Folder
+    - name: Organize WWW Folder and Fix Icons
       run: |
         mkdir -p www
         cp index.html www/ 2>/dev/null || true
         cp icon.svg www/ 2>/dev/null || true
+        cp ícone.svg www/ 2>/dev/null || true
         cp manifest.json www/ 2>/dev/null || true
         cp sw.js www/ 2>/dev/null || true
+        # Remove referencias de icones que nao existem para nao quebrar o build
+        sed -i '/<icon/d' config.xml
+        sed -i '/res\/icon/d' config.xml
 
     - name: Add Android Platform
       run: cordova platform add android@13.0.0
