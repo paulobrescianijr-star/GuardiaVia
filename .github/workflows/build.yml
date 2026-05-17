@@ -36,9 +36,9 @@ jobs:
       run: |
         mkdir -p www
         
-        # Copia absolutamente todos os arquivos e pastas para dentro de www (garante estilos e scripts)
+        # Copia absolutamente todos os arquivos e pastas para dentro de www
         for item in *; do
-          if [ "$item" != "www" ] && [ "$item" != "platforms" ] && [ "$item" != "plugins" ] && [ "$item" != "config.xml" ] && [ "$item" != "BUILD-APK.bat" ]; do
+          if [ "$item" != "www" ] && [ "$item" != "platforms" ] && [ "$item" != "plugins" ] && [ "$item" != "config.xml" ] && [ "$item" != "BUILD-APK.bat" ]; then
             cp -r "$item" www/ 2>/dev/null || true
           fi
         done
@@ -50,7 +50,7 @@ jobs:
         # Corrige o namespace do Android
         sed -i 's/<widget/<widget xmlns:android="http:\/\/schemas.android.com\/apk\/res\/android"/g' config.xml
         
-        # Ativa o modo moderno HTTPS para permitir o funcionamento do Service Worker e tirar a tela preta
+        # Ativa o modo moderno HTTPS para tirar a tela preta e rodar o Service Worker
         sed -i 's|<\/widget>|    <preference name="scheme" value="https" />\n    <preference name="hostname" value="localhost" />\n<\/widget>|g' config.xml
 
     - name: Add Android Platform
